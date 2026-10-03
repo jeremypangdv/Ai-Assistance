@@ -25,7 +25,7 @@ internal sealed class AssistantForm : Form
     public AssistantForm(IntentInterpreter? interpreter = null, bool startIndex = true)
     {
         _interpreter = interpreter ?? new IntentInterpreter();
-        Text = "LaunchBuddy 0.2.0";
+        Text = $"LaunchBuddy {typeof(AssistantForm).Assembly.GetName().Version?.ToString(3)}";
         Font = new Font("Segoe UI", 10F);
         BackColor = Color.FromArgb(248, 249, 251);
         ForeColor = Color.FromArgb(26, 31, 44);
