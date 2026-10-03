@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace LaunchBuddy;
 
@@ -9,6 +10,9 @@ internal sealed class ApplicationIndex : IDisposable
     private readonly object _gate = new();
     private readonly List<IndexedItem> _items = [];
     private readonly HashSet<string> _knownItems = new(StringComparer.OrdinalIgnoreCase);
+    // Keys seen by the build in progress; used to drop items that no longer exist once it finishes.
+    private HashSet<string>? _seen;
+    private bool _scanIncomplete;
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _indexTask;
     private int _count;
@@ -40,7 +44,56 @@ internal sealed class ApplicationIndex : IDisposable
         if (known is not null)
             return known;
 
-        return Search(query, 1).FirstOrDefault();
+        return FindInFolder(query) ?? Search(query, 1).FirstOrDefault();
+    }
+
+    // "Downloads 裡的 report.pdf" / "report.pdf in Downloads": match the name only inside that folder.
+    private static readonly Regex InFolderPattern = new(
+        @"^(?<folder>.+?)\s*(?:裡面的|裡的|里的|中的|內的)\s*(?<name>.+)$|^(?<name>.+?)\s+in\s+(?<folder>.+)$",
+        RegexOptions.IgnoreCase);
+
+    private ComputerItem? FindInFolder(string query)
+    {
+        var match = InFolderPattern.Match(query.Trim());
+        if (!match.Success)
+            return null;
+
+        var folder = FindFolder(match.Groups["folder"].Value);
+        var name = match.Groups["name"].Value.Trim();
+        if (folder is null || name.Length == 0)
+            return null;
+
+        var direct = ResolveDirectPath(Path.Combine(folder.Path, name));
+        if (direct is not null)
+            return direct;
+
+        var prefix = Path.TrimEndingDirectorySeparator(folder.Path) + Path.DirectorySeparatorChar;
+        var normalized = Normalize(name);
+        IndexedItem[] snapshot;
+        lock (_gate)
+        {
+            snapshot = _items.ToArray();
+        }
+
+        return snapshot
+            .Where(item => item.Item.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(item => (item.Item, Score: Score(item.NormalizedName, normalized)))
+            .Where(candidate => candidate.Score > 0)
+            .OrderByDescending(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.Item.Path.Length)
+            .Select(candidate => candidate.Item)
+            .FirstOrDefault();
+    }
+
+    private ComputerItem? FindFolder(string query)
+    {
+        var direct = ResolveDirectPath(query);
+        if (direct is not null)
+            return direct.Kind == ComputerItemKind.Folder ? direct : null;
+
+        var normalized = Normalize(query);
+        return KnownItems().FirstOrDefault(item => item.Kind == ComputerItemKind.Folder && Normalize(item.Name) == normalized)
+            ?? Search(query, 50).FirstOrDefault(item => item.Kind == ComputerItemKind.Folder);
     }
 
     public IReadOnlyList<ComputerItem> Search(string query, int maximum = 8)
@@ -69,6 +122,12 @@ internal sealed class ApplicationIndex : IDisposable
 
     private void BuildIndex(CancellationToken token)
     {
+        lock (_gate)
+        {
+            _seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+        _scanIncomplete = false;
+
         try
         {
             Merge(KnownItems());
@@ -87,13 +146,38 @@ internal sealed class ApplicationIndex : IDisposable
                 if (drive.IsReady && drive.DriveType == DriveType.Fixed)
                     ScanFolder(drive.RootDirectory.FullName, "本機磁碟", token);
             }
+
+            // Only prune after a complete scan, so a failed scan never drops items it did not reach.
+            if (!_scanIncomplete)
+                RemoveItemsNotSeen();
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
         {
             AppLog.Error("Index", exception);
         }
+        finally
+        {
+            lock (_gate)
+            {
+                _seen = null;
+            }
+        }
     }
+
+    private void RemoveItemsNotSeen()
+    {
+        lock (_gate)
+        {
+            if (_seen is null)
+                return;
+            _items.RemoveAll(item => !_seen.Contains(Key(item.Item)));
+            _knownItems.IntersectWith(_seen);
+            Volatile.Write(ref _count, _items.Count);
+        }
+    }
+
+    private static string Key(ComputerItem item) => item.Path + "\0" + item.Name;
 
     private void Merge(IEnumerable<ComputerItem> additions)
     {
@@ -103,8 +187,12 @@ internal sealed class ApplicationIndex : IDisposable
         lock (_gate)
         {
             foreach (var item in batch)
-                if (_knownItems.Add(item.Item.Path + "\0" + item.Item.Name))
+            {
+                var key = Key(item.Item);
+                _seen?.Add(key);
+                if (_knownItems.Add(key))
                     _items.Add(item);
+            }
             Volatile.Write(ref _count, _items.Count);
         }
     }
@@ -137,8 +225,8 @@ internal sealed class ApplicationIndex : IDisposable
                 }
             }
         }
-        catch (UnauthorizedAccessException) { }
-        catch (IOException) { }
+        catch (UnauthorizedAccessException) { _scanIncomplete = true; }
+        catch (IOException) { _scanIncomplete = true; }
         finally
         {
             Merge(batch);
@@ -155,7 +243,7 @@ internal sealed class ApplicationIndex : IDisposable
             Merge(Directory.EnumerateFiles(directory, "*.lnk", options)
                 .Select(path => new ComputerItem(Path.GetFileNameWithoutExtension(path), path, "開始功能表", ComputerItemKind.Application)));
         }
-        catch (IOException) { }
+        catch (IOException) { _scanIncomplete = true; }
     }
 
     private void AddAppPaths(RegistryKey root)
@@ -177,8 +265,8 @@ internal sealed class ApplicationIndex : IDisposable
             }
             Merge(found);
         }
-        catch (UnauthorizedAccessException) { }
-        catch (System.Security.SecurityException) { }
+        catch (UnauthorizedAccessException) { _scanIncomplete = true; }
+        catch (System.Security.SecurityException) { _scanIncomplete = true; }
     }
 
     private void AddStoreApps()
@@ -198,15 +286,24 @@ internal sealed class ApplicationIndex : IDisposable
             var found = new List<ComputerItem>();
             for (var index = 0; index < apps.Count; index++)
             {
-                dynamic app = apps.Item(index);
-                string name = app.Name;
-                string appId = app.Path;
-                if (!string.IsNullOrWhiteSpace(name) && appId.Contains('!'))
-                    found.Add(new ComputerItem(name, "shell:AppsFolder\\" + appId, "Microsoft Store app", ComputerItemKind.Application));
+                // One broken entry must not prevent the remaining Store apps from being indexed.
+                try
+                {
+                    dynamic app = apps.Item(index);
+                    string? name = app.Name;
+                    string? appId = app.Path;
+                    if (!string.IsNullOrWhiteSpace(name) && appId is not null && appId.Contains('!'))
+                        found.Add(new ComputerItem(name, "shell:AppsFolder\\" + appId, "Microsoft Store app", ComputerItemKind.Application));
+                }
+                catch (Exception exception) { AppLog.Error("StoreIndex", exception); }
             }
             Merge(found);
         }
-        catch (Exception exception) { AppLog.Error("StoreIndex", exception); }
+        catch (Exception exception)
+        {
+            _scanIncomplete = true;
+            AppLog.Error("StoreIndex", exception);
+        }
         finally
         {
             if (shellObject is not null && Marshal.IsComObject(shellObject))

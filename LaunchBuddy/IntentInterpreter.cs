@@ -148,7 +148,7 @@ internal sealed class IntentInterpreter : IDisposable
 
     private static Intent Fallback(string message, IReadOnlyList<WebsiteRecord> websites)
     {
-        var hasOpen = Regex.IsMatch(message, @"開啟|開啓|开启|打開|打开|^\s*開|\bopen\b", RegexOptions.IgnoreCase);
+        var hasOpen = Regex.IsMatch(message, @"開啟|開啓|开启|打開|打开|" + BareOpen + @"|\bopen\b", RegexOptions.IgnoreCase);
         var urlMatch = Regex.Match(message, @"https?://[^\s<>\""'，。]+", RegexOptions.IgnoreCase);
 
         if (Regex.IsMatch(message, @"記住|儲存|保存|存下|\bsave\b|\bstore\b", RegexOptions.IgnoreCase) && urlMatch.Success)
@@ -172,14 +172,15 @@ internal sealed class IntentInterpreter : IDisposable
 
         if (hasOpen)
         {
-            var matched = websites.OrderByDescending(site => site.Alias.Length)
-                .FirstOrDefault(site => message.Contains(site.Alias, StringComparison.OrdinalIgnoreCase));
+            // The whole target must be the alias, so "GitHub Desktop" is not taken for a site saved as "GitHub".
+            var query = ExtractApplicationQuery(message);
+            var matched = websites.FirstOrDefault(site =>
+                string.Equals(site.Alias.Trim(), query, StringComparison.OrdinalIgnoreCase));
             if (matched is not null)
             {
                 return new Intent { Action = "open_saved_website", Alias = matched.Alias };
             }
 
-            var query = ExtractApplicationQuery(message);
             return new Intent
             {
                 Action = "open_application",
@@ -209,9 +210,13 @@ internal sealed class IntentInterpreter : IDisposable
         return match.Success ? CleanName(match.Groups[1].Value) : string.Empty;
     }
 
+    // A bare "開" counts as "open" anywhere, except in common words such as 開始, 開心 or 開會.
+    private const string BareOpen = "開(?![始心會關車放玩門口銷發])";
+
     private static string ExtractApplicationQuery(string message)
     {
-        var query = Regex.Replace(message, @"^.*?(?:開啟|開啓|开启|打開|打开|開|open)\s*", string.Empty, RegexOptions.IgnoreCase);
+        var query = Regex.Replace(message, @"^.*?(?:開啟|開啓|开启|打開|打开|" + BareOpen + @"|\bopen\b)\s*", string.Empty, RegexOptions.IgnoreCase);
+        query = Regex.Replace(query, @"\s*\b(?:as|with|in)\s+(?:an?\s+)?(?:administrator|admin)\b(?:\s+(?:mode|privileges?|rights))?", string.Empty, RegexOptions.IgnoreCase);
         query = Regex.Replace(query, @"(?:以|用)?\s*(?:管理員|administrator|admin)(?:身分|身份)?\s*(?:模式)?", string.Empty, RegexOptions.IgnoreCase);
         return CleanName(query);
     }

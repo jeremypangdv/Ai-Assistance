@@ -44,14 +44,17 @@ internal sealed class WebsiteStore
     {
         lock (_gate)
         {
+            // Apply the change to a copy and only publish it once it is on disk,
+            // so a failed save never leaves memory and the file out of sync.
+            var updated = Copy(_database);
             var now = DateTimeOffset.Now;
-            var existing = _database.Websites.FirstOrDefault(w =>
+            var existing = updated.Websites.FirstOrDefault(w =>
                 string.Equals(w.Alias.Trim(), alias.Trim(), StringComparison.OrdinalIgnoreCase));
 
             if (existing is null)
             {
                 existing = new WebsiteRecord { Alias = alias.Trim(), Url = url.Trim(), CreatedAt = now, UpdatedAt = now };
-                _database.Websites.Add(existing);
+                updated.Websites.Add(existing);
             }
             else
             {
@@ -60,7 +63,8 @@ internal sealed class WebsiteStore
                 existing.UpdatedAt = now;
             }
 
-            Save();
+            Save(updated);
+            _database = updated;
             return Clone(existing);
         }
     }
@@ -69,15 +73,17 @@ internal sealed class WebsiteStore
     {
         lock (_gate)
         {
-            var existing = _database.Websites.FirstOrDefault(w =>
+            var updated = Copy(_database);
+            var existing = updated.Websites.FirstOrDefault(w =>
                 string.Equals(w.Alias.Trim(), alias.Trim(), StringComparison.OrdinalIgnoreCase));
             if (existing is null)
             {
                 return false;
             }
 
-            _database.Websites.Remove(existing);
-            Save();
+            updated.Websites.Remove(existing);
+            Save(updated);
+            _database = updated;
             return true;
         }
     }
@@ -94,19 +100,42 @@ internal sealed class WebsiteStore
             return JsonSerializer.Deserialize<WebsiteDatabase>(File.ReadAllText(_databasePath), _jsonOptions)
                 ?? new WebsiteDatabase();
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            // A malformed file must not prevent the tray assistant from starting.
+            // A malformed file must not prevent the tray assistant from starting, but keep a copy
+            // so the next save cannot silently overwrite the user's only list of websites.
+            AppLog.Error("WebsiteStore", exception);
+            BackUpUnreadableFile();
             return new WebsiteDatabase();
         }
     }
 
-    private void Save()
+    private void BackUpUnreadableFile()
+    {
+        try
+        {
+            var backupPath = Path.Combine(
+                Path.GetDirectoryName(_databasePath)!,
+                $"saved-websites.unreadable-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json");
+            File.Copy(_databasePath, backupPath, false);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("WebsiteStore", exception);
+        }
+    }
+
+    private void Save(WebsiteDatabase database)
     {
         var temporaryPath = _databasePath + ".new";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(_database, _jsonOptions));
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(database, _jsonOptions));
         File.Move(temporaryPath, _databasePath, true);
     }
+
+    private static WebsiteDatabase Copy(WebsiteDatabase database) => new()
+    {
+        Websites = database.Websites.Select(Clone).ToList()
+    };
 
     private static WebsiteRecord Clone(WebsiteRecord website) => new()
     {
