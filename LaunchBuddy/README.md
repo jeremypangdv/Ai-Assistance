@@ -14,7 +14,7 @@
 ## 執行
 
 目前修正版的固定交付位置是 `E:\Assistant\dist\LaunchBuddy\LaunchBuddy.exe`。
-標題列應顯示 **LaunchBuddy 0.2.0**。先結束系統列中的舊版，再開啟此檔案。
+標題列應顯示 **LaunchBuddy 0.2.1**。先結束系統列中的舊版，再開啟此檔案。
 
 先確定 Ollama 正在執行，並已有至少一個模型（優先選用名稱以 `llama` 開頭的模型）。然後在此資料夾執行：
 
