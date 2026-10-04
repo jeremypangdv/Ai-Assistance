@@ -175,6 +175,8 @@ internal sealed class AssistantForm : Form
     }
 
     public bool IsCompactShowing => Visible && _compact && WindowState != FormWindowState.Minimized;
+    public event EventHandler? SettingsRequested;
+
     public bool IsBusy => _isSubmitting;
     public bool HasPendingAction => _pendingAction is not null;
     // When the current Approve card appeared; speech that started earlier must not answer it.
@@ -353,7 +355,7 @@ internal sealed class AssistantForm : Form
         _headerActions = new Panel
         {
             Dock = DockStyle.Right,
-            Width = 142,
+            Width = 192,
             Padding = new Padding(12, 16, 12, 16)
         };
         var refresh = new Button
@@ -367,7 +369,20 @@ internal sealed class AssistantForm : Form
             _applicationIndex.Refresh();
             AddMessage("助手", "已開始在背景刷新索引，你可以繼續聊天。", false);
         };
+        // E713 is the "Settings" gear in Segoe MDL2 Assets.
+        var settings = new Button
+        {
+            Text = "",
+            Font = new Font("Segoe MDL2 Assets", 12F),
+            Dock = DockStyle.Right,
+            Width = 42
+        };
+        Theme.StyleButton(settings);
+        new ToolTip().SetToolTip(settings, "設定");
+        settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         _headerActions.Controls.Add(refresh);
+        _headerActions.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8 });
+        _headerActions.Controls.Add(settings);
         header.Controls.Add(_headerActions);
         // Keep the status line within the header at any window width.
         header.Resize += (_, _) => FitStatusLabel();
@@ -639,7 +654,7 @@ internal sealed class AssistantForm : Form
         _approvalPanel.Controls.Add(detail);
         _approvalPanel.Controls.Add(buttons);
         _approvalPanel.Controls.Add(heading);
-        AddMessage("助手", "我已準備好這項動作；請在下方選擇 Approve 或 Reject（開啟語音輸入時，也可以直接說 approve 或 reject）。", false);
+        AddMessage("助手", "我已準備好這項動作；請在下方選擇 Approve 或 Reject（也可以用語音說 approve 或 reject）。", false);
     }
 
     private void ApprovePendingAction()

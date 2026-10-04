@@ -6,6 +6,7 @@
   - 左鍵點 icon：開／關小型聊天框。
   - 右鍵點 icon，選 **Maximize（完整聊天）**：開啟原本的完整聊天視窗；小型與完整視窗共用同一段對話。
   - 系統列 icon 亦可用：單擊開小型聊天，雙擊開完整聊天。
+- 按住說話：按住 **Left Ctrl** 說指令，放開後辨識並送出（不用說 Hey Minibot）；可在完整聊天視窗右上角的 ⚙ 設定更改按鍵或關閉。
 - 語音輸入（預設關閉，右鍵選單「語音輸入（Hey Minibot）」開啟）：說「Hey Minibot, open Google Chrome」或「Hey Minibot，幫我開記事本」；出現確認卡後說 **approve／批准** 或 **reject／取消**，也可照常手動按。詳見下方「語音輸入」。
 - 透過本機 Ollama（`http://127.0.0.1:11434`）的 tool calling 理解中文指令。
 - 搜尋 Windows 開始功能表、Windows App Paths、Microsoft Store 的開始功能表捷徑，以及所有固定磁碟中的 application、檔案與資料夾，然後準備開啟。
@@ -18,7 +19,7 @@
 ## 執行
 
 目前修正版的固定交付位置是 `E:\Ai-Assistance\dist\LaunchBuddy\LaunchBuddy.exe`。
-標題列應顯示 **LaunchBuddy 0.6.0**。先結束系統列中的舊版，再開啟此檔案。
+標題列應顯示 **LaunchBuddy 0.7.0**。先結束系統列中的舊版，再開啟此檔案。
 
 先確定 Ollama 正在執行，並已有至少一個模型（優先選用名稱以 `llama` 開頭的模型）。然後在此資料夾執行：
 
@@ -58,6 +59,17 @@ dotnet build
 `%LOCALAPPDATA%\LaunchBuddy\saved-websites.json`
 
 ## 語音輸入
+
+### 按住說話（預設開啟，Left Ctrl）
+
+- 按住按鍵時才開啟麥克風，放開後約 2 秒辨識完成並送出；不需要說 Hey Minibot，也不需要開啟下方的 Hey Minibot 語音輸入。
+- 出現確認卡時，按住按鍵說 approve 或 reject。
+- 按住期間按了其他鍵（例如 Ctrl+C、Ctrl+V）或點了滑鼠，這次就不會送出；短按（少於 0.25 秒）也不會。Ctrl 本身照常運作。
+- 完整聊天視窗右上角的 ⚙ 可以關閉按住說話，或按「更改按鍵」後按下任何按鍵（例如 Right Ctrl、F13）來更換。
+- 第一次按住時若尚未下載語音模型，會跳出提示，點提示即可下載。
+- 注意：若在遊戲中 Left Ctrl 是常用按鍵（例如蹲下），建議改成其他按鍵或關閉。
+
+### Hey Minibot（預設關閉）
 
 - 第一次開啟時會下載 Whisper small 模型（約 180 MB）到 `%LOCALAPPDATA%\LaunchBuddy\models`，之後完全在本機辨識，聲音不會上傳。
 - 開啟後圓形 icon 右上角會出現綠點，Windows 也會顯示麥克風使用中。

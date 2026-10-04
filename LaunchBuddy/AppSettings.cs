@@ -8,6 +8,9 @@ internal sealed class AppSettings
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LaunchBuddy", "settings.json");
 
     public bool VoiceEnabled { get; set; }
+    public bool PushToTalkEnabled { get; set; } = true;
+    // Windows virtual-key code; 0xA2 is Left Ctrl.
+    public int PushToTalkKey { get; set; } = 0xA2;
 
     public static AppSettings Load()
     {
