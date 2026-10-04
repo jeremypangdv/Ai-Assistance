@@ -397,8 +397,19 @@ internal sealed class AssistantForm : Form
         }
     }
 
+    // The model may pick "open application" for a saved site name, or "open saved website" for an app; route to whichever exists.
+    private Intent RouteOpenIntent(Intent intent) => intent.Action switch
+    {
+        "open_application" when !intent.AsAdministrator && _websiteStore.Find(intent.Query) is { } site =>
+            new Intent { Action = "open_saved_website", Alias = site.Alias },
+        "open_saved_website" when _websiteStore.Find(intent.Alias) is null && !string.IsNullOrWhiteSpace(intent.Alias) =>
+            new Intent { Action = "open_application", Query = intent.Alias },
+        _ => intent
+    };
+
     private async Task HandleIntentAsync(Intent intent, CancellationToken cancellationToken)
     {
+        intent = RouteOpenIntent(intent);
         switch (intent.Action)
         {
             case "save_website":

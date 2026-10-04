@@ -44,12 +44,20 @@ internal sealed class ApplicationIndex : IDisposable
         if (known is not null)
             return known;
 
-        return FindInFolder(query) ?? Search(query, 1).FirstOrDefault();
+        var found = FindInFolder(query) ?? Search(query, 1).FirstOrDefault();
+        if (found is not null)
+            return found;
+
+        // The model sometimes guesses a path or adds ".exe" (e.g. "C:\Program Files\...\Code.exe", "notepad.exe"); retry with the bare name.
+        var bareName = Path.GetFileNameWithoutExtension(query.Trim().Trim('"'));
+        return bareName.Length > 0 && !string.Equals(bareName, query.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? Find(bareName)
+            : null;
     }
 
     // "Downloads 裡的 report.pdf" / "report.pdf in Downloads": match the name only inside that folder.
     private static readonly Regex InFolderPattern = new(
-        @"^(?<folder>.+?)\s*(?:裡面的|裡的|里的|中的|內的)\s*(?<name>.+)$|^(?<name>.+?)\s+in\s+(?<folder>.+)$",
+        @"^(?<folder>.+?)\s*(?:裡面的|裡的|里的|中的|內的|的)\s*(?<name>.+)$|^(?<name>.+?)\s+in\s+(?<folder>.+)$",
         RegexOptions.IgnoreCase);
 
     private ComputerItem? FindInFolder(string query)
@@ -322,6 +330,8 @@ internal sealed class ApplicationIndex : IDisposable
             ("計算機", Path.Combine(system, "calc.exe")),
             ("Paint", Path.Combine(system, "mspaint.exe")),
             ("Command Prompt", Path.Combine(system, "cmd.exe")),
+            ("cmd", Path.Combine(system, "cmd.exe")),
+            ("PowerShell", Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe")),
             ("Desktop", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)),
             ("桌面", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)),
             ("Documents", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)),
@@ -330,6 +340,7 @@ internal sealed class ApplicationIndex : IDisposable
             ("檔案", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)),
             ("Downloads", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")),
             ("下載資料夾", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")),
+            ("下載", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")),
             ("Pictures", Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)),
             ("圖片", Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)),
             ("Music", Environment.GetFolderPath(Environment.SpecialFolder.MyMusic)),
@@ -364,6 +375,8 @@ internal sealed class ApplicationIndex : IDisposable
         if (name == query) return 100;
         if (name.StartsWith(query, StringComparison.Ordinal)) return 80;
         if (name.Contains(query, StringComparison.Ordinal)) return 60;
+        // "microsoft excel" should find the "excel" shortcut before a file that merely contains both words.
+        if (name.Length >= 3 && query.Contains(name, StringComparison.Ordinal)) return 50;
         var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         return words.Length > 0 && words.All(word => name.Contains(word, StringComparison.Ordinal)) ? 40 : 0;
     }

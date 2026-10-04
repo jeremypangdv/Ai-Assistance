@@ -14,7 +14,7 @@
 ## 執行
 
 目前修正版的固定交付位置是 `E:\Ai-Assistance\dist\LaunchBuddy\LaunchBuddy.exe`。
-標題列應顯示 **LaunchBuddy 0.3.0**。先結束系統列中的舊版，再開啟此檔案。
+標題列應顯示 **LaunchBuddy 0.4.0**。先結束系統列中的舊版，再開啟此檔案。
 
 先確定 Ollama 正在執行，並已有至少一個模型（優先選用名稱以 `llama` 開頭的模型）。然後在此資料夾執行：
 
@@ -46,6 +46,8 @@ dotnet build
 - `打開下載資料夾`
 - `開我的檔案`
 - `開 C:\Users\你的名稱\Downloads\example.pdf`
+
+以上只是例子。Ollama 運作時，模型會理解不同說法（中文、粵語、英文皆可），例如「我想上 YouTube」、「用最高權限跑 cmd」、「bookmark https://reddit.com as reddit」。Ollama 沒有連線時，才需要接近上面的寫法。
 
 按系統列 icon 的右鍵選單「隨 Windows 開機啟動」，可由使用者自行切換開機常駐。資料庫位於：
 
