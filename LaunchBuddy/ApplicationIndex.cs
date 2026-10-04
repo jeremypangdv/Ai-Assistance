@@ -55,6 +55,53 @@ internal sealed class ApplicationIndex : IDisposable
             : null;
     }
 
+    // Running as administrator needs a real .exe; Start Menu and desktop shortcuts are followed to their target.
+    public ComputerItem? FindExecutable(string query)
+    {
+        var best = Find(query);
+        var candidates = best is null ? Search(query, 50) : Search(query, 50).Prepend(best);
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Kind != ComputerItemKind.Application)
+                continue;
+            if (IsExecutable(candidate.Path))
+                return candidate;
+            if (candidate.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) &&
+                ResolveShortcut(candidate.Path) is { } target && IsExecutable(target))
+                return candidate with { Path = target, Source = $"{candidate.Source}（捷徑目標）" };
+        }
+        return null;
+    }
+
+    private static bool IsExecutable(string path) =>
+        path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(path);
+
+    private static string? ResolveShortcut(string path)
+    {
+        object? shellObject = null;
+        try
+        {
+            var type = Type.GetTypeFromProgID("WScript.Shell");
+            if (type is null)
+                return null;
+            shellObject = Activator.CreateInstance(type);
+            dynamic shell = shellObject!;
+            dynamic shortcut = shell.CreateShortcut(path);
+            string? target = shortcut.TargetPath;
+            return string.IsNullOrWhiteSpace(target) ? null : Environment.ExpandEnvironmentVariables(target);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("Shortcut", exception);
+            return null;
+        }
+        finally
+        {
+            if (shellObject is not null && Marshal.IsComObject(shellObject))
+                Marshal.FinalReleaseComObject(shellObject);
+        }
+    }
+
     // "Downloads 裡的 report.pdf" / "report.pdf in Downloads": match the name only inside that folder.
     private static readonly Regex InFolderPattern = new(
         @"^(?<folder>.+?)\s*(?:裡面的|裡的|里的|中的|內的|的)\s*(?<name>.+)$|^(?<name>.+?)\s+in\s+(?<folder>.+)$",

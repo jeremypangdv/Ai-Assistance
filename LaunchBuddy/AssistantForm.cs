@@ -542,7 +542,9 @@ internal sealed class AssistantForm : Form
                     AddMessage("助手", "請告訴我想開啟哪一個 application、檔案、資料夾或完整路徑，例如：「開 Notepad」或「開下載資料夾」。", false);
                     return;
                 }
-                var item = await Task.Run(() => _applicationIndex.Find(intent.Query), cancellationToken).WaitAsync(cancellationToken);
+                var item = await Task.Run(() => intent.AsAdministrator
+                    ? _applicationIndex.FindExecutable(intent.Query) ?? _applicationIndex.Find(intent.Query)
+                    : _applicationIndex.Find(intent.Query), cancellationToken).WaitAsync(cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (IsDisposed)
                     return;
@@ -553,7 +555,7 @@ internal sealed class AssistantForm : Form
                 }
                 if (intent.AsAdministrator && (item.Kind != ComputerItemKind.Application || !item.Path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
                 {
-                    AddMessage("助手", "以管理員身分開啟目前只適用於可執行的 .exe application；檔案、資料夾與捷徑會以一般方式開啟。", false);
+                    AddMessage("助手", $"找到的是「{item.Name}」（{item.Path}），但找不到對應的 .exe，所以無法以管理員身分開啟。你可以直接提供 .exe 的完整路徑，或改用一般方式開啟。", false);
                     return;
                 }
                 SetPending(new PendingAction
