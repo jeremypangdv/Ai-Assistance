@@ -27,8 +27,8 @@ internal sealed class AssistantForm : Form
         _interpreter = interpreter ?? new IntentInterpreter();
         Text = $"LaunchBuddy {typeof(AssistantForm).Assembly.GetName().Version?.ToString(3)}";
         Font = new Font("Segoe UI", 10F);
-        BackColor = Color.FromArgb(248, 249, 251);
-        ForeColor = Color.FromArgb(26, 31, 44);
+        BackColor = Theme.Background;
+        ForeColor = Theme.Text;
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimizeBox = true;
@@ -36,6 +36,7 @@ internal sealed class AssistantForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 820);
         MinimumSize = new Size(820, 620);
+        HandleCreated += (_, _) => Theme.UseDarkTitleBar(this);
 
         var sidebar = BuildSidebar();
         _chatSurface = new TableLayoutPanel
@@ -62,11 +63,11 @@ internal sealed class AssistantForm : Form
             Height = 0,
             Visible = false,
             Padding = new Padding(14, 8, 14, 8),
-            BackColor = Color.FromArgb(255, 248, 225)
+            BackColor = Theme.ApprovalBackground
         };
 
         var composer = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(26, 12, 26, 16), BackColor = BackColor };
-        var composerCard = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 10, 8), BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+        var composerCard = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 10, 8), BackColor = Theme.Surface };
         _input = new TextBox
         {
             Multiline = true,
@@ -74,27 +75,26 @@ internal sealed class AssistantForm : Form
             BorderStyle = BorderStyle.None,
             Font = new Font("Segoe UI", 11F),
             PlaceholderText = "輸入指令，例如：開 Downloads 裡的 report.pdf",
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
             Dock = DockStyle.Fill
         };
+        Theme.UseDarkScrollBars(_input);
         _input.KeyDown += InputKeyDown;
         _sendButton = new Button
         {
             Text = "傳送",
             Dock = DockStyle.Right,
-            Width = 92,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(47, 92, 255),
-            ForeColor = Color.White,
-            Cursor = Cursors.Hand
+            Width = 92
         };
-        _sendButton.FlatAppearance.BorderSize = 0;
+        Theme.StyleButton(_sendButton, Theme.Accent);
         _sendButton.Click += async (_, _) => await SubmitAsync();
         var shortcutHint = new Label
         {
             Text = "Enter 傳送 · Shift + Enter 換行 · 所有動作均須 Approve",
             Dock = DockStyle.Bottom,
             Height = 19,
-            ForeColor = Color.FromArgb(110, 118, 129),
+            ForeColor = Theme.TextMuted,
             Font = new Font("Segoe UI", 8.5F)
         };
         composerCard.Controls.Add(_input);
@@ -106,9 +106,9 @@ internal sealed class AssistantForm : Form
             Text = "取消等待",
             Dock = DockStyle.Right,
             Width = 92,
-            FlatStyle = FlatStyle.Flat,
             Visible = false
         };
+        Theme.StyleButton(_cancelButton);
         _cancelButton.Click += (_, _) => _requestCts?.Cancel();
         composerCard.Controls.Add(_cancelButton);
         _cancelButton.BringToFront();
@@ -132,13 +132,14 @@ internal sealed class AssistantForm : Form
             ReadOnly = true,
             BorderStyle = BorderStyle.None,
             BackColor = BackColor,
-            ForeColor = Color.FromArgb(31, 35, 41),
+            ForeColor = Theme.Text,
             Font = new Font("Segoe UI", 10.5F),
             ScrollBars = RichTextBoxScrollBars.Vertical,
             DetectUrls = false,
             HideSelection = false,
             ShortcutsEnabled = true
         };
+        Theme.UseDarkScrollBars(_messages);
         _messageViewport.Controls.Add(_messages);
 
         _messageViewport.Margin = Padding.Empty;
@@ -183,7 +184,7 @@ internal sealed class AssistantForm : Form
             Dock = DockStyle.Left,
             Width = 248,
             Padding = new Padding(16),
-            BackColor = Color.FromArgb(31, 35, 41)
+            BackColor = Theme.Sidebar
         };
 
         var title = new Label
@@ -198,26 +199,22 @@ internal sealed class AssistantForm : Form
         {
             Text = "本機啟動助手",
             AutoSize = true,
-            ForeColor = Color.FromArgb(176, 184, 196),
+            ForeColor = Theme.TextSecondary,
             Location = new Point(18, 51)
         };
         var newChat = new Button
         {
             Text = "＋  新對話",
-            FlatStyle = FlatStyle.Flat,
-            ForeColor = Color.White,
-            BackColor = Color.FromArgb(50, 56, 65),
             Location = new Point(16, 87),
-            Size = new Size(216, 38),
-            Cursor = Cursors.Hand
+            Size = new Size(216, 38)
         };
-        newChat.FlatAppearance.BorderColor = Color.FromArgb(91, 99, 110);
+        Theme.StyleButton(newChat);
         newChat.Click += (_, _) => StartNewConversation();
 
         var guide = new Label
         {
             Text = "你可以要求：\n\n• 開啟 application\n• 開啟檔案或資料夾\n• 以管理員方式開啟 .exe\n• 記住或開啟網站\n\n所有動作均需你按 Approve。",
-            ForeColor = Color.FromArgb(205, 211, 220),
+            ForeColor = Theme.TextSecondary,
             Location = new Point(19, 160),
             Size = new Size(205, 195),
             Font = new Font("Segoe UI", 9.5F)
@@ -225,7 +222,7 @@ internal sealed class AssistantForm : Form
         var storage = new Label
         {
             Text = "本機模式\n資料不會上傳",
-            ForeColor = Color.FromArgb(139, 148, 158),
+            ForeColor = Theme.TextMuted,
             AutoSize = true,
             Anchor = AnchorStyles.Bottom | AnchorStyles.Left,
             Location = new Point(19, 690),
@@ -242,7 +239,7 @@ internal sealed class AssistantForm : Form
 
     private Control BuildHeader()
     {
-        var header = new Panel { Dock = DockStyle.Top, Height = 104, Padding = new Padding(16, 11, 12, 10), BackColor = Color.White };
+        var header = new Panel { Dock = DockStyle.Top, Height = 104, Padding = new Padding(16, 11, 12, 10), BackColor = Theme.Surface };
         var title = new Label
         {
             Text = "LaunchBuddy",
@@ -256,7 +253,7 @@ internal sealed class AssistantForm : Form
         {
             Text = "本機 application、檔案、資料夾與已記錄網站助手",
             AutoSize = true,
-            ForeColor = Color.FromArgb(88, 98, 117),
+            ForeColor = Theme.TextSecondary,
             Location = new Point(18, 42)
         };
         header.Controls.Add(subtitle);
@@ -266,7 +263,7 @@ internal sealed class AssistantForm : Form
             Text = "正在檢查 Ollama…",
             AutoEllipsis = true,
             TextAlign = ContentAlignment.MiddleLeft,
-            ForeColor = Color.FromArgb(88, 98, 117),
+            ForeColor = Theme.TextSecondary,
             Location = new Point(18, 70),
             Size = new Size(620, 20)
         };
@@ -281,10 +278,9 @@ internal sealed class AssistantForm : Form
         var refresh = new Button
         {
             Text = "刷新索引",
-            Dock = DockStyle.Fill,
-            FlatStyle = FlatStyle.Flat,
-            Cursor = Cursors.Hand
+            Dock = DockStyle.Fill
         };
+        Theme.StyleButton(refresh);
         refresh.Click += (_, _) =>
         {
             _applicationIndex.Refresh();
@@ -524,7 +520,7 @@ internal sealed class AssistantForm : Form
             Text = action.Details,
             Dock = DockStyle.Fill,
             AutoEllipsis = true,
-            ForeColor = Color.FromArgb(65, 56, 28)
+            ForeColor = Theme.ApprovalText
         };
         var buttons = new FlowLayoutPanel
         {
@@ -533,10 +529,11 @@ internal sealed class AssistantForm : Form
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false
         };
-        var approve = new Button { Text = "Approve", Width = 108, Height = 36, BackColor = Color.FromArgb(34, 132, 80), ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand };
-        approve.FlatAppearance.BorderSize = 0;
+        var approve = new Button { Text = "Approve", Width = 108, Height = 36 };
+        Theme.StyleButton(approve, Theme.Approve);
         approve.Click += (_, _) => ApprovePendingAction();
-        var reject = new Button { Text = "Reject", Width = 98, Height = 36, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand };
+        var reject = new Button { Text = "Reject", Width = 98, Height = 36 };
+        Theme.StyleButton(reject);
         reject.Click += (_, _) => RejectPendingAction();
         buttons.Controls.Add(approve);
         buttons.Controls.Add(reject);
@@ -620,10 +617,10 @@ internal sealed class AssistantForm : Form
         _messages.SelectionStart = _messages.TextLength;
         _messages.SelectionLength = 0;
         _messages.SelectionFont = new Font("Segoe UI Semibold", 10F);
-        _messages.SelectionColor = fromUser ? Color.FromArgb(25, 94, 180) : Color.FromArgb(31, 35, 41);
+        _messages.SelectionColor = fromUser ? Theme.UserName : Theme.Text;
         _messages.AppendText(sender + "\n");
         _messages.SelectionFont = new Font("Segoe UI", 11F);
-        _messages.SelectionColor = Color.FromArgb(38, 44, 52);
+        _messages.SelectionColor = Theme.Text;
         _messages.AppendText(text.Trim() + "\n\n");
         _messages.SelectionColor = _messages.ForeColor;
         _messages.SelectionFont = _messages.Font;
