@@ -84,6 +84,54 @@ internal sealed class IntentInterpreter : IDisposable
         }
     }
 
+    // A short name for a captured page, e.g. "GitHub" or "YouTube 音樂"; null when the model is unavailable or unhelpful.
+    public async Task<string?> SuggestWebsiteNameAsync(string title, string url, IEnumerable<string> takenNames, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            var model = await GetAvailableModelAsync(deadline.Token);
+            if (model is null)
+                return null;
+            var payload = new
+            {
+                model,
+                stream = false,
+                messages = new object[]
+                {
+                    new
+                    {
+                        role = "system",
+                        content = $"""
+                            你替使用者的網站書籤取名，之後使用者會說「開 <名稱>」來開啟它，所以名稱要短、好唸、好認：通常是網站或服務名稱，必要時加上頁面主題，最多 4 個詞或 8 個中文字，例如 GitHub、YouTube、Gmail、Google 翻譯、LaunchBuddy repo。
+                            依頁面標題的語言命名。不要用引號、標點、網址或說明，只回覆名稱本身。
+                            以下名稱已被使用，不可重複：{string.Join("、", takenNames.DefaultIfEmpty("（沒有）"))}
+                            """
+                    },
+                    new { role = "user", content = $"頁面標題：{title}\n網址：{url}" }
+                },
+                options = new { temperature = 0, num_predict = 24 }
+            };
+            using var response = await _client.PostAsJsonAsync("/api/chat", payload, deadline.Token);
+            response.EnsureSuccessStatusCode();
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(deadline.Token));
+            var name = document.RootElement.TryGetProperty("message", out var message) && message.TryGetProperty("content", out var content)
+                ? CleanName(content.GetString()?.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty)
+                : string.Empty;
+            return name.Length is > 0 and <= 40 && !name.Contains("://", StringComparison.Ordinal) ? name : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("OllamaName", exception);
+            return null;
+        }
+    }
+
     private async Task<string?> GetAvailableModelAsync(CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(_model))
@@ -177,6 +225,7 @@ internal sealed class IntentInterpreter : IDisposable
         return action switch
         {
             "save_website" => new Intent { Action = action, Alias = ReadString("alias"), Url = ReadString("url") },
+            "save_current_website" => new Intent { Action = action, Alias = ReadString("alias") },
             "open_saved_website" => new Intent { Action = action, Alias = ReadString("alias") },
             "remove_saved_website" => new Intent { Action = action, Alias = ReadString("alias") },
             "list_saved_websites" => new Intent { Action = action },
@@ -194,6 +243,12 @@ internal sealed class IntentInterpreter : IDisposable
         {
             var alias = ExtractAlias(message, urlMatch.Index);
             return new Intent { Action = "save_website", Alias = alias, Url = urlMatch.Value };
+        }
+
+        if (CurrentPagePhrase.IsMatch(message) && Regex.IsMatch(message, @"記住|記下|儲存|保存|存下|存起|收藏|書籤|\bsave\b|\bremember\b|\bbookmark\b", RegexOptions.IgnoreCase))
+        {
+            var named = Regex.Match(message, @"(?:叫做|叫|名稱是|名稱為|命名為|存成|\bas\b|\bcalled\b)\s*[「“""']?\s*(.+?)\s*[」”""']?\s*$", RegexOptions.IgnoreCase);
+            return new Intent { Action = "save_current_website", Alias = named.Success ? CleanName(named.Groups[1].Value) : string.Empty };
         }
 
         if (Regex.IsMatch(message, @"列出|清單|有哪些|\blist\b", RegexOptions.IgnoreCase) &&
@@ -230,6 +285,11 @@ internal sealed class IntentInterpreter : IDisposable
 
         return new Intent { Action = "chat", Reply = "我可以幫你開程式、以管理員身分開程式，或永久記住指定網站。" };
     }
+
+    // "This website / the page I'm on" in Chinese, Cantonese and English.
+    private static readonly Regex CurrentPagePhrase = new(
+        @"(?:這|这|呢|目前|當前|当前|現在|现在|而家)(?:個|个)?\s*的?\s*(?:網站|网站|網頁|网页|網址|网址|頁面|页面|頁|页|連結|链接|page|site|website|link|tab)|\b(?:this|current)\s+(?:page|site|website|tab|link)\b",
+        RegexOptions.IgnoreCase);
 
     private static string ExtractAlias(string message, int urlIndex)
     {
@@ -274,7 +334,8 @@ internal sealed class IntentInterpreter : IDisposable
 
         return $"""
             你是 Windows 本機啟動助手，負責理解使用者的意思並呼叫一個工具。使用者可能用繁體中文、簡體中文、粵語或英文，用任何說法表達；請理解意思，不要要求固定格式。程式會先請使用者 Approve，你不可聲稱已完成動作。
-            - 想記住、收藏、存起來、加書籤、以後要用某個網址 → save_website
+            - 想記住、收藏、存起來、加書籤、以後要用某個網址，而且訊息裡有網址 → save_website
+            - 想記住「這個網站／這頁／目前在看的網頁」但沒有給網址 → save_current_website（程式會讀取瀏覽器目前的網址）；使用者有指定名稱才填 alias
             - 想開、去、上、看已儲存清單中的網站 → open_saved_website
             - 想開啟、啟動、執行、跑、使用電腦上的程式、資料夾或檔案 → open_application；只要使用者表達要管理員或最高權限，as_administrator 就是 true
             - 想刪除、忘記、不再記住某個網站 → remove_saved_website
@@ -288,6 +349,7 @@ internal sealed class IntentInterpreter : IDisposable
     private static readonly object[] ToolDefinitions =
     [
         Tool("save_website", "把使用者提供的 http/https 網址永久記下來，之後可用名稱開啟。", new { alias = new { type = "string", description = "使用者為網站取的名稱；沒有指定時用網站的簡短名稱" }, url = new { type = "string", description = "使用者訊息中的完整 http/https 網址，必須原樣照抄" } }, new[] { "alias", "url" }),
+        Tool("save_current_website", "記住使用者瀏覽器目前開著的網頁；程式會自行讀取網址，不需要也不可以填網址。", new { alias = new { type = "string", description = "使用者明確指定的名稱；沒有指定就留空" } }, Array.Empty<string>()),
         Tool("open_saved_website", "開啟已儲存網站清單中的一個網站。", new { alias = new { type = "string", description = "已儲存網站清單中的名稱" } }, new[] { "alias" }),
         Tool("remove_saved_website", "從已儲存網站清單刪除一個網站。", new { alias = new { type = "string", description = "已儲存網站清單中的名稱" } }, new[] { "alias" }),
         Tool("list_saved_websites", "列出所有已儲存網站。", new { }, Array.Empty<string>()),

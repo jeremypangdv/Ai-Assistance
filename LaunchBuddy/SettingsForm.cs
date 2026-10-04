@@ -20,15 +20,23 @@ internal sealed class SettingsForm : Form
     private readonly Label _toggleLabel;
     private readonly Button _changeToggle;
     private readonly Label _toggleHint;
+    private readonly ListView _websiteList;
+    private readonly Button _editWebsite;
+    private readonly Button _removeWebsite;
+    private readonly List<WebsiteRecord> _websites;
     private KeyCapture _capture;
 
     public int PushToTalkKey { get; private set; }
     public bool PushToTalkEnabled => _pushToTalkEnabled.Checked;
     public Keys QuickToggleKeys { get; private set; }
     public bool QuickToggleEnabled => _quickToggleEnabled.Checked;
+    // The edited list; only written to the store when the dialog is saved.
+    public IReadOnlyList<WebsiteRecord> Websites => _websites;
+    public bool WebsitesChanged { get; private set; }
 
-    public SettingsForm(AppSettings settings, string? quickToggleProblem = null)
+    public SettingsForm(AppSettings settings, IReadOnlyList<WebsiteRecord> websites, string? quickToggleProblem = null)
     {
+        _websites = websites.ToList();
         PushToTalkKey = settings.PushToTalkKey;
         QuickToggleKeys = (Keys)settings.QuickToggleKeys;
         Text = "LaunchBuddy 設定";
@@ -40,7 +48,7 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(500, 560);
+        ClientSize = new Size(980, 560);
         HandleCreated += (_, _) => Theme.UseDarkTitleBar(this);
 
         var heading = Heading("按住說話（Push-to-talk）", 20);
@@ -52,28 +60,162 @@ internal sealed class SettingsForm : Form
         _keyHint = Hint(236);
 
         var toggleHeading = Heading("快速開關", 290);
-        var toggleDescription = Description("按這組快捷鍵暫停語音輸入（含 Hey Minibot），再按一次恢復。", 324, 30);
+        var toggleDescription = Description("暫停語音輸入（含 Hey Minibot），再按一次恢復。", 324, 30);
         _quickToggleEnabled = new CheckBox { Text = "啟用快速開關快捷鍵", Checked = settings.QuickToggleEnabled, AutoSize = true, Location = new Point(24, 362) };
         (_toggleLabel, _changeToggle) = KeyRow("快捷鍵：", GlobalHotkey.Describe(QuickToggleKeys), 402, KeyCapture.QuickToggle);
         _toggleHint = Hint(442);
         _toggleHint.Text = quickToggleProblem ?? "";
 
-        var save = new Button { Text = "儲存", Size = new Size(96, 34), Location = new Point(276, 506), DialogResult = DialogResult.OK };
+        // Right column: saved websites.
+        var websiteHeading = Heading("網站", 20, left: WebsiteLeft);
+        var websiteDescription = Description(
+            "說「記住這個網站」會讀取瀏覽器目前的網頁，並由 AI 自動取名。名稱就是之後說「開 名稱」時用的字，可在這裡改名、新增或移除；按儲存後生效。",
+            54, 72, left: WebsiteLeft, width: WebsiteWidth);
+        _websiteList = new ListView
+        {
+            View = View.Details,
+            FullRowSelect = true,
+            MultiSelect = false,
+            HideSelection = false,
+            ShowItemToolTips = true,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
+            BorderStyle = BorderStyle.FixedSingle,
+            Location = new Point(WebsiteLeft, 132),
+            Size = new Size(WebsiteWidth, 318)
+        };
+        // The native header ignores BackColor, so draw it to match the dark theme.
+        _websiteList.OwnerDraw = true;
+        _websiteList.DrawColumnHeader += (_, eventArgs) =>
+        {
+            using (var background = new SolidBrush(Theme.Raised))
+                eventArgs.Graphics.FillRectangle(background, eventArgs.Bounds);
+            using (var divider = new Pen(Theme.Border))
+                eventArgs.Graphics.DrawLine(divider, eventArgs.Bounds.Right - 1, eventArgs.Bounds.Top, eventArgs.Bounds.Right - 1, eventArgs.Bounds.Bottom);
+            var text = eventArgs.Bounds with { X = eventArgs.Bounds.X + 6, Width = eventArgs.Bounds.Width - 6 };
+            TextRenderer.DrawText(eventArgs.Graphics, eventArgs.Header?.Text, _websiteList.Font, text, Theme.TextSecondary,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        };
+        _websiteList.DrawItem += (_, eventArgs) => eventArgs.DrawDefault = true;
+        _websiteList.DrawSubItem += (_, eventArgs) => eventArgs.DrawDefault = true;
+        _websiteList.Columns.Add("名稱", 150);
+        _websiteList.Columns.Add("網址");
+        Theme.UseDarkScrollBars(_websiteList);
+        _websiteList.SelectedIndexChanged += (_, _) => UpdateWebsiteButtons();
+        // The vertical scrollbar only counts once the list exists and is filled.
+        _websiteList.HandleCreated += (_, _) => BeginInvoke(StretchAddressColumn);
+        _websiteList.ClientSizeChanged += (_, _) => StretchAddressColumn();
+        _websiteList.DoubleClick += (_, _) => EditWebsite();
+        _websiteList.KeyDown += (_, eventArgs) =>
+        {
+            if (eventArgs.KeyCode == Keys.Delete)
+                RemoveWebsite();
+        };
+        var addWebsite = WebsiteButton("新增…", 0, AddWebsite);
+        _editWebsite = WebsiteButton("改名／編輯…", 1, EditWebsite);
+        _removeWebsite = WebsiteButton("移除", 2, RemoveWebsite);
+
+        var save = new Button { Text = "儲存", Size = new Size(96, 34), Location = new Point(ClientSize.Width - 24 - 96 - 8 - 96, 506), DialogResult = DialogResult.OK };
         Theme.StyleButton(save, Theme.Accent);
-        var cancel = new Button { Text = "取消", Size = new Size(96, 34), Location = new Point(380, 506), DialogResult = DialogResult.Cancel };
+        var cancel = new Button { Text = "取消", Size = new Size(96, 34), Location = new Point(ClientSize.Width - 24 - 96, 506), DialogResult = DialogResult.Cancel };
         Theme.StyleButton(cancel);
         AcceptButton = save;
         CancelButton = cancel;
 
-        Controls.AddRange([heading, description, _pushToTalkEnabled, _keyHint, toggleHeading, toggleDescription, _quickToggleEnabled, _toggleHint, save, cancel]);
+        Controls.AddRange([heading, description, _pushToTalkEnabled, _keyHint, toggleHeading, toggleDescription, _quickToggleEnabled, _toggleHint,
+            websiteHeading, websiteDescription, _websiteList, addWebsite, _editWebsite, _removeWebsite, save, cancel]);
         UpdateKeyHint();
+        FillWebsiteList();
     }
 
-    private static Label Heading(string text, int top) =>
-        new() { Text = text, Font = new Font("Segoe UI Semibold", 12F), AutoSize = true, Location = new Point(24, top) };
+    private const int WebsiteLeft = 520;
+    private const int WebsiteWidth = 436;
 
-    private static Label Description(string text, int top, int height) =>
-        new() { Text = text, ForeColor = Theme.TextSecondary, Location = new Point(24, top), Size = new Size(452, height) };
+    private Button WebsiteButton(string text, int index, Action onClick)
+    {
+        var button = new Button { Text = text, Location = new Point(WebsiteLeft + index * 124, 458), Size = new Size(116, 32) };
+        Theme.StyleButton(button);
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    private void FillWebsiteList(WebsiteRecord? select = null)
+    {
+        _websiteList.BeginUpdate();
+        _websiteList.Items.Clear();
+        foreach (var website in _websites.OrderBy(site => site.Alias, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var item = new ListViewItem([website.Alias, website.Url]) { Tag = website, ToolTipText = website.Url };
+            _websiteList.Items.Add(item);
+            if (website == select)
+            {
+                item.Selected = true;
+                item.EnsureVisible();
+            }
+        }
+        _websiteList.EndUpdate();
+        StretchAddressColumn();
+        UpdateWebsiteButtons();
+    }
+
+    // Fill the list to its edge (inside any vertical scrollbar), so no undrawn header strip or horizontal scrollbar appears.
+    private void StretchAddressColumn()
+    {
+        if (_websiteList.IsHandleCreated)
+            _websiteList.Columns[1].Width = _websiteList.ClientSize.Width - _websiteList.Columns[0].Width;
+    }
+
+    private WebsiteRecord? SelectedWebsite =>
+        _websiteList.SelectedItems.Count == 1 ? (WebsiteRecord)_websiteList.SelectedItems[0].Tag! : null;
+
+    private void UpdateWebsiteButtons()
+    {
+        _editWebsite.Enabled = SelectedWebsite is not null;
+        _removeWebsite.Enabled = SelectedWebsite is not null;
+    }
+
+    private void AddWebsite()
+    {
+        using var dialog = new WebsiteEditForm(null, _websites.Select(site => site.Alias).ToList());
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        var website = new WebsiteRecord { Alias = dialog.WebsiteName, Url = dialog.WebsiteUrl };
+        _websites.Add(website);
+        WebsitesChanged = true;
+        FillWebsiteList(website);
+    }
+
+    private void EditWebsite()
+    {
+        if (SelectedWebsite is not { } website)
+            return;
+        using var dialog = new WebsiteEditForm(website, _websites.Where(site => site != website).Select(site => site.Alias).ToList());
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        website.Alias = dialog.WebsiteName;
+        website.Url = dialog.WebsiteUrl;
+        WebsitesChanged = true;
+        FillWebsiteList(website);
+    }
+
+    private void RemoveWebsite()
+    {
+        if (SelectedWebsite is not { } website)
+            return;
+        if (MessageBox.Show(this, $"移除「{website.Alias}」？\n{website.Url}\n\n按儲存後才會真正移除。", "移除網站",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK)
+            return;
+        _websites.Remove(website);
+        WebsitesChanged = true;
+        FillWebsiteList();
+    }
+
+    private static Label Heading(string text, int top, int left = 24) =>
+        new() { Text = text, Font = new Font("Segoe UI Semibold", 12F), AutoSize = true, Location = new Point(left, top) };
+
+    private static Label Description(string text, int top, int height, int left = 24, int width = 452) =>
+        new() { Text = text, ForeColor = Theme.TextSecondary, Location = new Point(left, top), Size = new Size(width, height) };
 
     private static Label Hint(int top) =>
         new() { ForeColor = Theme.ApprovalText, Location = new Point(24, top), Size = new Size(452, 40), Font = new Font("Segoe UI", 9F) };

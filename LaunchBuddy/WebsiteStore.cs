@@ -40,6 +40,45 @@ internal sealed class WebsiteStore
         }
     }
 
+    // Same page saved under any name; a trailing slash or letter case in the host doesn't make it different.
+    public WebsiteRecord? FindByUrl(string url)
+    {
+        lock (_gate)
+        {
+            var result = _database.Websites.FirstOrDefault(w => SameUrl(w.Url, url));
+            return result is null ? null : Clone(result);
+        }
+    }
+
+    private static bool SameUrl(string first, string second) =>
+        Uri.TryCreate(first.Trim(), UriKind.Absolute, out var a) && Uri.TryCreate(second.Trim(), UriKind.Absolute, out var b)
+            ? a.AbsoluteUri.TrimEnd('/') == b.AbsoluteUri.TrimEnd('/')
+            : string.Equals(first.Trim(), second.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    // Replaces the whole list with the one edited in settings, keeping each kept site's creation time.
+    public void ReplaceAll(IEnumerable<WebsiteRecord> websites)
+    {
+        lock (_gate)
+        {
+            var now = DateTimeOffset.Now;
+            var previous = _database.Websites;
+            var updated = new WebsiteDatabase
+            {
+                Websites = websites.Select(website =>
+                {
+                    var record = Clone(website);
+                    record.Alias = record.Alias.Trim();
+                    record.Url = record.Url.Trim();
+                    var before = previous.FirstOrDefault(w => w.CreatedAt == website.CreatedAt);
+                    record.UpdatedAt = before is not null && before.Alias == record.Alias && before.Url == record.Url ? before.UpdatedAt : now;
+                    return record;
+                }).ToList()
+            };
+            Save(updated);
+            _database = updated;
+        }
+    }
+
     public WebsiteRecord Upsert(string alias, string url)
     {
         lock (_gate)

@@ -41,6 +41,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private bool _voicePaused;
     // The popup shows a transient listening card (key held, or a bare "Hey Minibot").
     private bool _popupListening;
+    private bool _settingsOpen;
     private string _lastReply = "";
 
     public TrayApplicationContext()
@@ -72,6 +73,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add(_voiceItem);
         _pauseItem = new ToolStripMenuItem("暫停語音輸入", null, (_, _) => ToggleVoicePause());
         menu.Items.Add(_pauseItem);
+        menu.Items.Add("設定（語音、網站）…", null, (_, _) => OpenSettings());
         var runAtStartup = new ToolStripMenuItem("隨 Windows 開機啟動") { Checked = StartupManager.IsEnabled(), CheckOnClick = false };
         runAtStartup.Click += (_, _) =>
         {
@@ -497,15 +499,34 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenSettings()
     {
-        using var dialog = new SettingsForm(_settings, _quickToggleProblem);
+        if (_settingsOpen)
+            return;
+        _settingsOpen = true;
+        using var dialog = new SettingsForm(_settings, _form.Websites.All(), _quickToggleProblem);
         // Pressing the current keys in the dialog must not start a recording or toggle the pause.
         if (_pushToTalk is not null)
             _pushToTalk.Enabled = false;
         _quickToggle?.Unregister();
         CancelTalking();
-        var result = dialog.ShowDialog(_form);
+        // From the icon menu the chat is hidden, and a hidden owner would center the dialog on nothing.
+        if (!_form.Visible)
+            dialog.StartPosition = FormStartPosition.CenterScreen;
+        var result = _form.Visible ? dialog.ShowDialog(_form) : dialog.ShowDialog();
+        _settingsOpen = false;
         if (result == DialogResult.OK)
         {
+            if (dialog.WebsitesChanged)
+            {
+                try
+                {
+                    _form.Websites.ReplaceAll(dialog.Websites);
+                }
+                catch (Exception exception)
+                {
+                    AppLog.Error("WebsiteStore", exception);
+                    _trayIcon.ShowBalloonTip(3000, "無法儲存網站清單", exception.Message, ToolTipIcon.Error);
+                }
+            }
             _settings.PushToTalkEnabled = dialog.PushToTalkEnabled;
             _settings.PushToTalkKey = dialog.PushToTalkKey;
             _settings.QuickToggleEnabled = dialog.QuickToggleEnabled;

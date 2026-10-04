@@ -185,6 +185,8 @@ internal sealed class AssistantForm : Form
     // When the current Approve card appeared; speech that started earlier must not answer it.
     public DateTime PendingSince => _pendingSince;
     public PendingAction? CurrentPendingAction => _pendingAction;
+    // Shared with the settings dialog, which edits the saved websites directly.
+    public WebsiteStore Websites => _websiteStore;
 
     public void ApprovePending() => ApprovePendingAction();
     public void RejectPending() => RejectPendingAction();
@@ -519,7 +521,17 @@ internal sealed class AssistantForm : Form
         intent = RouteOpenIntent(intent);
         switch (intent.Action)
         {
+            case "save_current_website":
+                await SaveCurrentWebsiteAsync(intent.Alias, cancellationToken);
+                return;
+
             case "save_website":
+                // No address given: the model meant the page that is open in the browser.
+                if (string.IsNullOrWhiteSpace(intent.Url))
+                {
+                    await SaveCurrentWebsiteAsync(intent.Alias, cancellationToken);
+                    return;
+                }
                 if (!IsSafeUrl(intent.Url))
                 {
                     AddMessage("助手", "請提供有效的 http 或 https 網址，例如：https://github.com", false);
@@ -767,6 +779,64 @@ internal sealed class AssistantForm : Form
             _messages.ScrollToCaret();
         });
     }
+
+    private async Task SaveCurrentWebsiteAsync(string alias, CancellationToken cancellationToken)
+    {
+        _phase = "正在讀取瀏覽器目前的網頁";
+        var tab = await Task.Run(CurrentBrowserTab.Capture, cancellationToken).WaitAsync(cancellationToken);
+        if (IsDisposed)
+            return;
+        if (tab is null)
+        {
+            AddMessage("助手", "找不到開著網頁的瀏覽器視窗（支援 Chrome、Edge、Brave、Vivaldi、Opera、Firefox）。請先切到想記住的網頁再說一次，或直接提供網址。", false);
+            return;
+        }
+
+        var name = alias.Trim();
+        if (_websiteStore.FindByUrl(tab.Url) is { } saved && (name.Length == 0 || string.Equals(saved.Alias, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            AddMessage("助手", $"這個網頁已經記錄為「{saved.Alias}」。要改名可到 ⚙ 設定的「網站」。", false);
+            return;
+        }
+
+        var generated = name.Length == 0;
+        if (generated)
+        {
+            _phase = "正在替網站取名";
+            var taken = _websiteStore.All().Select(site => site.Alias).ToList();
+            name = await _interpreter.SuggestWebsiteNameAsync(tab.Title, tab.Url, taken, cancellationToken) ?? FallbackWebsiteName(tab.Url);
+            name = UniqueWebsiteName(name, taken);
+        }
+        var existing = _websiteStore.Find(name);
+        SetPending(new PendingAction
+        {
+            Kind = PendingActionKind.SaveWebsite,
+            Title = existing is null ? "準備永久儲存目前的網頁" : "準備更新已儲存網站",
+            Details = $"名稱：{name}{(generated ? "（自動取名，可在 ⚙ 設定改名）" : "")}\n網址：{Shorten(tab.Url, 120)}\n頁面：{Shorten(tab.Title, 80)}（{tab.Browser}）\n\n此資料會保存在本機，直到你明確移除它。",
+            Website = new WebsiteRecord { Alias = name, Url = tab.Url }
+        });
+    }
+
+    // Without the model: the host, e.g. "github.com".
+    private static string FallbackWebsiteName(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return url;
+        return uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host;
+    }
+
+    private static string UniqueWebsiteName(string name, IReadOnlyCollection<string> taken)
+    {
+        bool IsTaken(string candidate) => taken.Contains(candidate, StringComparer.OrdinalIgnoreCase);
+        if (!IsTaken(name))
+            return name;
+        var number = 2;
+        while (IsTaken($"{name} {number}"))
+            number++;
+        return $"{name} {number}";
+    }
+
+    private static string Shorten(string text, int length) => text.Length <= length ? text : text[..(length - 1)] + "…";
 
     private static bool IsSafeUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
