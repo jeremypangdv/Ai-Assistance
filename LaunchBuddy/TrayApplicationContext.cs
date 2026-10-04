@@ -4,6 +4,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 {
     private NotifyIcon _trayIcon = null!;
     private readonly AssistantForm _form;
+    private readonly FloatingButton _floatingButton;
     private readonly System.Windows.Forms.Timer _singleClickTimer;
     private bool _quitting;
 
@@ -13,7 +14,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _form.FormClosing += FormClosing;
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("顯示 LaunchBuddy", null, (_, _) => _form.ShowFull());
+        var maximize = new ToolStripMenuItem("Maximize（完整聊天）", null, (_, _) => _form.ShowFull()) { Font = new Font(menu.Font, FontStyle.Bold) };
+        menu.Items.Add(maximize);
+        menu.Items.Add("小型聊天", null, (_, _) => ShowCompact());
         var runAtStartup = new ToolStripMenuItem("隨 Windows 開機啟動") { Checked = StartupManager.IsEnabled(), CheckOnClick = false };
         runAtStartup.Click += (_, _) =>
         {
@@ -36,7 +39,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _singleClickTimer.Tick += (_, _) =>
         {
             _singleClickTimer.Stop();
-            _form.ShowFull();
+            ToggleCompact();
         };
 
         _trayIcon = new NotifyIcon
@@ -48,9 +51,30 @@ internal sealed class TrayApplicationContext : ApplicationContext
         };
         _trayIcon.MouseClick += TrayMouseClick;
         _trayIcon.MouseDoubleClick += TrayMouseDoubleClick;
-        _trayIcon.ShowBalloonTip(2500, "LaunchBuddy 已就緒", "單擊或雙擊 icon 都會顯示完整聊天。", ToolTipIcon.Info);
-        _form.ShowFull();
+        _floatingButton = new FloatingButton(menu);
+        _floatingButton.Clicked += (_, _) => ToggleCompact();
+        _floatingButton.Show();
+        // The full window covers the screen corner, so park the button while it is open.
+        _form.VisibleChanged += (_, _) => UpdateFloatingButton();
+        _form.Resize += (_, _) => UpdateFloatingButton();
+        _trayIcon.ShowBalloonTip(2500, "LaunchBuddy 已就緒", "點擊右下角的圓形 icon 開啟小型聊天；右鍵選 Maximize 開啟完整聊天。", ToolTipIcon.Info);
     }
+
+    private void ToggleCompact()
+    {
+        if (_form.IsCompactShowing)
+            _form.Hide();
+        else
+            ShowCompact();
+    }
+
+    private void UpdateFloatingButton()
+    {
+        if (!_quitting && !_floatingButton.IsDisposed)
+            _floatingButton.Visible = !_form.IsFullShowing;
+    }
+
+    private void ShowCompact() => _form.ShowCompact(_floatingButton.Bounds);
 
     private void TrayMouseClick(object? sender, MouseEventArgs eventArgs)
     {
@@ -85,6 +109,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _singleClickTimer.Stop();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _floatingButton.Close();
         _form.Close();
         _form.Dispose();
         ExitThread();
@@ -96,6 +121,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             _singleClickTimer.Dispose();
             _trayIcon.Dispose();
+            _floatingButton.Dispose();
         }
 
         base.Dispose(disposing);

@@ -11,7 +11,13 @@ internal sealed class AssistantForm : Form
     private readonly RichTextBox _messages;
     private readonly Panel _approvalPanel;
     private readonly TableLayoutPanel _chatSurface;
+    private readonly Control _sidebar;
+    private readonly Panel _composer;
+    private readonly Label _shortcutHint;
     private Label _statusLabel = null!;
+    private Label _headerSubtitle = null!;
+    private Panel _headerActions = null!;
+    private bool _compact;
     private readonly TextBox _input;
     private readonly Button _sendButton;
     private readonly Button _cancelButton;
@@ -38,7 +44,7 @@ internal sealed class AssistantForm : Form
         MinimumSize = new Size(820, 620);
         HandleCreated += (_, _) => Theme.UseDarkTitleBar(this);
 
-        var sidebar = BuildSidebar();
+        _sidebar = BuildSidebar();
         _chatSurface = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -54,7 +60,7 @@ internal sealed class AssistantForm : Form
         _chatSurface.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         _chatSurface.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
         Controls.Add(_chatSurface);
-        Controls.Add(sidebar);
+        Controls.Add(_sidebar);
         var header = BuildHeader();
 
         _approvalPanel = new Panel
@@ -66,7 +72,7 @@ internal sealed class AssistantForm : Form
             BackColor = Theme.ApprovalBackground
         };
 
-        var composer = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(26, 12, 26, 16), BackColor = BackColor };
+        _composer = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(26, 12, 26, 16), BackColor = BackColor };
         var composerCard = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 10, 8), BackColor = Theme.Surface };
         _input = new TextBox
         {
@@ -89,7 +95,7 @@ internal sealed class AssistantForm : Form
         };
         Theme.StyleButton(_sendButton, Theme.Accent);
         _sendButton.Click += async (_, _) => await SubmitAsync();
-        var shortcutHint = new Label
+        _shortcutHint = new Label
         {
             Text = "Enter 傳送 · Shift + Enter 換行 · 所有動作均須 Approve",
             Dock = DockStyle.Bottom,
@@ -99,8 +105,8 @@ internal sealed class AssistantForm : Form
         };
         composerCard.Controls.Add(_input);
         composerCard.Controls.Add(_sendButton);
-        composerCard.Controls.Add(shortcutHint);
-        composer.Controls.Add(composerCard);
+        composerCard.Controls.Add(_shortcutHint);
+        _composer.Controls.Add(composerCard);
         _cancelButton = new Button
         {
             Text = "取消等待",
@@ -149,7 +155,13 @@ internal sealed class AssistantForm : Form
         _chatSurface.Controls.Add(header, 0, 0);
         _chatSurface.Controls.Add(_messageViewport, 0, 1);
         _chatSurface.Controls.Add(_approvalPanel, 0, 2);
-        _chatSurface.Controls.Add(composer, 0, 3);
+        _chatSurface.Controls.Add(_composer, 0, 3);
+        // The title bar's own maximize button on the compact window switches to the full layout.
+        Resize += (_, _) =>
+        {
+            if (_compact && WindowState == FormWindowState.Maximized)
+                ApplyLayout(compact: false);
+        };
 
         AddMessage("助手", "你好，我只會協助你尋找／開啟程式，以及永久記住你明確指定的網站。\n\n所有開啟、儲存、更新與刪除，都必須先由你按 Approve。", false);
         Shown += async (_, _) =>
@@ -161,20 +173,70 @@ internal sealed class AssistantForm : Form
         };
     }
 
+    public bool IsCompactShowing => Visible && _compact && WindowState != FormWindowState.Minimized;
+    public bool IsFullShowing => Visible && !_compact && WindowState != FormWindowState.Minimized;
+
     public void ShowFull()
     {
         if (WindowState == FormWindowState.Minimized)
         {
             WindowState = FormWindowState.Normal;
         }
-        if (!Visible)
+        if (!Visible || _compact)
         {
+            ApplyLayout(compact: false);
             Size = new Size(1180, 820);
             StartPosition = FormStartPosition.CenterScreen;
             CenterToScreen();
         }
         WindowState = FormWindowState.Maximized;
         ShowAndFocus();
+    }
+
+    // Small chat window placed beside the floating button; shares the same conversation as the full window.
+    public void ShowCompact(Rectangle anchor)
+    {
+        if (WindowState != FormWindowState.Normal)
+            WindowState = FormWindowState.Normal;
+        ApplyLayout(compact: true);
+
+        var size = new Size(400, 580);
+        var area = Screen.FromRectangle(anchor).WorkingArea;
+        var x = anchor.Right - size.Width;
+        var y = anchor.Top - size.Height - 10;
+        if (y < area.Top)
+            y = anchor.Bottom + 10;
+        Bounds = new Rectangle(
+            Math.Clamp(x, area.Left, Math.Max(area.Left, area.Right - size.Width)),
+            Math.Clamp(y, area.Top, Math.Max(area.Top, area.Bottom - size.Height)),
+            size.Width, size.Height);
+        ShowAndFocus();
+    }
+
+    private void ApplyLayout(bool compact)
+    {
+        _compact = compact;
+        SuspendLayout();
+        TopMost = compact;
+        MinimumSize = compact ? new Size(340, 440) : new Size(820, 620);
+        _sidebar.Visible = !compact;
+        _headerSubtitle.Visible = !compact;
+        _headerActions.Visible = !compact;
+        _shortcutHint.Visible = !compact;
+        _statusLabel.Top = compact ? 40 : 70;
+        _chatSurface.RowStyles[0].Height = compact ? 68 : 108;
+        _chatSurface.RowStyles[3].Height = compact ? 100 : 126;
+        _messageViewport.Padding = compact ? new Padding(14, 10, 14, 10) : new Padding(26, 18, 26, 18);
+        _composer.Padding = compact ? new Padding(12, 8, 12, 12) : new Padding(26, 12, 26, 16);
+        ResumeLayout(true);
+        FitStatusLabel();
+    }
+
+    private void FitStatusLabel()
+    {
+        if (_statusLabel.Parent is { } header)
+            _statusLabel.Width = Math.Max(120,
+                header.ClientSize.Width - _statusLabel.Left - (_headerActions.Visible ? _headerActions.Width : 0) - 12);
     }
 
     private Control BuildSidebar()
@@ -249,14 +311,14 @@ internal sealed class AssistantForm : Form
         };
         header.Controls.Add(title);
 
-        var subtitle = new Label
+        _headerSubtitle = new Label
         {
             Text = "本機 application、檔案、資料夾與已記錄網站助手",
             AutoSize = true,
             ForeColor = Theme.TextSecondary,
             Location = new Point(18, 42)
         };
-        header.Controls.Add(subtitle);
+        header.Controls.Add(_headerSubtitle);
 
         _statusLabel = new Label
         {
@@ -269,7 +331,7 @@ internal sealed class AssistantForm : Form
         };
         header.Controls.Add(_statusLabel);
 
-        var headerActions = new Panel
+        _headerActions = new Panel
         {
             Dock = DockStyle.Right,
             Width = 142,
@@ -286,8 +348,10 @@ internal sealed class AssistantForm : Form
             _applicationIndex.Refresh();
             AddMessage("助手", "已開始在背景刷新索引，你可以繼續聊天。", false);
         };
-        headerActions.Controls.Add(refresh);
-        header.Controls.Add(headerActions);
+        _headerActions.Controls.Add(refresh);
+        header.Controls.Add(_headerActions);
+        // Keep the status line within the header at any window width.
+        header.Resize += (_, _) => FitStatusLabel();
         return header;
     }
 
