@@ -127,9 +127,11 @@ internal sealed class VoiceListener : IDisposable
         UpdateMicrophone();
     }
 
-    public async Task EndPushToTalkAsync()
+    // False when nothing was sent for transcription: no speech was heard, or a newer press took over.
+    public async Task<bool> EndPushToTalkAsync()
     {
         int generation;
+        var queued = false;
         lock (_gate)
             generation = _pushToTalkGeneration;
         await Task.Delay(PushToTalkTail);
@@ -137,13 +139,14 @@ internal sealed class VoiceListener : IDisposable
         {
             // A new press during the tail owns the recording now.
             if (!_pushToTalk || generation != _pushToTalkGeneration)
-                return;
+                return false;
             _pushToTalk = false;
             if (_pushToTalkVoicedFrames >= MinimumPushToTalkFrames)
-                _segments.Writer.TryWrite((PadForWhisper(_pushToTalkAudio), _pushToTalkStarted, true));
+                queued = _segments.Writer.TryWrite((PadForWhisper(_pushToTalkAudio), _pushToTalkStarted, true));
             _pushToTalkAudio.Clear();
         }
         UpdateMicrophone();
+        return queued;
     }
 
     private void UpdateMicrophone()
@@ -296,7 +299,8 @@ internal sealed class VoiceListener : IDisposable
                 await foreach (var segment in _processor!.ProcessAsync(samples, cancellationToken))
                     parts.Add(segment.Text);
                 var text = VoicePhrases.Clean(string.Join(" ", parts));
-                if (text.Length > 0)
+                // A push-to-talk recording always gets an answer, even an empty one, so the popup can stop waiting.
+                if (text.Length > 0 || pushToTalk)
                     Transcribed?.Invoke(text, startedAt, pushToTalk);
             }
         }

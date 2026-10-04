@@ -18,9 +18,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly SynchronizationContext _ui;
     private readonly ToolStripMenuItem _voiceItem;
+    private readonly ToolStripMenuItem _pauseItem;
     private readonly System.Windows.Forms.Timer _voiceStateTimer;
     private readonly System.Windows.Forms.Timer _mouseWatch;
     private readonly PushToTalkHook? _pushToTalk;
+    private readonly GlobalHotkey? _quickToggle;
+    private string? _quickToggleProblem;
+    // Voice requests made while the chat is hidden are shown here instead of opening the chat.
+    private readonly VoicePopup _popup = new();
+    // The listening card waits for MinimumHold, so Ctrl+C and quick taps don't flash it.
+    private readonly System.Windows.Forms.Timer _listeningDelay;
     // Loaded Whisper model, shared by "Hey Minibot" listening and push-to-talk; the microphone opens only while one is active.
     private VoiceListener? _listener;
     private Task<bool>? _listenerLoading;
@@ -30,14 +37,31 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private bool _talking;
     private DateTime _talkStarted;
     private bool _offerModelDownload;
+    // Quick-toggle pause: push-to-talk and Hey Minibot both off until toggled back; not saved.
+    private bool _voicePaused;
+    // The popup shows a transient listening card (key held, or a bare "Hey Minibot").
+    private bool _popupListening;
+    private string _lastReply = "";
 
     public TrayApplicationContext()
     {
         _form = new AssistantForm();
         _form.FormClosing += FormClosing;
         _form.SettingsRequested += (_, _) => OpenSettings();
+        _form.AssistantReplied += text => _lastReply = text;
         // Creating the form installed the WinForms context; voice events arrive on background threads and are posted here.
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+
+        _popup.ApproveClicked += () =>
+        {
+            _form.ApprovePending();
+            _popup.ShowResult(_lastReply);
+        };
+        _popup.RejectClicked += () =>
+        {
+            _form.RejectPending();
+            _popup.ShowResult(_lastReply);
+        };
 
         var menu = new ContextMenuStrip();
         var maximize = new ToolStripMenuItem("Maximize（完整聊天）", null, (_, _) => _form.ShowFull()) { Font = new Font(menu.Font, FontStyle.Bold) };
@@ -46,6 +70,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _voiceItem = new ToolStripMenuItem(VoiceMenuText);
         _voiceItem.Click += async (_, _) => await ToggleWakeListeningAsync();
         menu.Items.Add(_voiceItem);
+        _pauseItem = new ToolStripMenuItem("暫停語音輸入", null, (_, _) => ToggleVoicePause());
+        menu.Items.Add(_pauseItem);
         var runAtStartup = new ToolStripMenuItem("隨 Windows 開機啟動") { Checked = StartupManager.IsEnabled(), CheckOnClick = false };
         runAtStartup.Click += (_, _) =>
         {
@@ -95,9 +121,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // The full window covers the screen corner, so park the button while it is open.
         _form.VisibleChanged += (_, _) => UpdateFloatingButton();
         _form.Resize += (_, _) => UpdateFloatingButton();
-        _trayIcon.ShowBalloonTip(2500, "LaunchBuddy 已就緒",
-            $"點擊右下角的圓形 icon 開啟小型聊天；右鍵選 Maximize 開啟完整聊天。按住 {PushToTalkHook.KeyName(_settings.PushToTalkKey)} 可以直接說話。",
-            ToolTipIcon.Info);
+        // Opening the chat takes over from the popup; it shows the same conversation and Approve card.
+        _form.VisibleChanged += (_, _) =>
+        {
+            if (_form.Visible)
+            {
+                _popupListening = false;
+                _popup.HidePopup();
+            }
+        };
 
         _voiceStateTimer = new System.Windows.Forms.Timer { Interval = 300 };
         _voiceStateTimer.Tick += (_, _) => UpdateVoiceIndicator();
@@ -111,17 +143,45 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 CancelTalking();
         };
 
+        _listeningDelay = new System.Windows.Forms.Timer { Interval = (int)MinimumHold.TotalMilliseconds };
+        _listeningDelay.Tick += (_, _) =>
+        {
+            _listeningDelay.Stop();
+            // While a spoken request is still processing, its card stays; the red button already shows the key is held.
+            if (!_talking || _form.Visible || _form.IsBusy)
+                return;
+            _popupListening = true;
+            _popup.ShowListening(Anchor, _form.HasPendingAction ? "說 approve 或 reject，放開按鍵送出。" : "說出指令，放開按鍵送出。");
+        };
+
         try
         {
-            _pushToTalk = new PushToTalkHook(_settings.PushToTalkKey) { Enabled = _settings.PushToTalkEnabled };
+            _pushToTalk = new PushToTalkHook(_settings.PushToTalkKey);
             _pushToTalk.Pressed += OnTalkPressed;
             _pushToTalk.Released += OnTalkReleased;
             _pushToTalk.Interrupted += CancelTalking;
+            ApplyPushToTalkEnabled();
         }
         catch (Exception exception)
         {
             AppLog.Error("PushToTalk", exception);
         }
+
+        try
+        {
+            _quickToggle = new GlobalHotkey();
+            _quickToggle.Pressed += ToggleVoicePause;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("QuickToggle", exception);
+        }
+        RegisterQuickToggle();
+
+        var toggleHint = _pauseItem.ShortcutKeyDisplayString is { } shortcut ? $"按 {shortcut} 可暫停／恢復語音輸入。" : "";
+        _trayIcon.ShowBalloonTip(2500, "LaunchBuddy 已就緒",
+            $"點擊右下角的圓形 icon 開啟小型聊天；右鍵選 Maximize 開啟完整聊天。按住 {PushToTalkHook.KeyName(_settings.PushToTalkKey)} 可以直接說話。{toggleHint}",
+            ToolTipIcon.Info);
 
         // Only resume automatically; the first download of the model is always the user's choice.
         if (VoiceListener.IsModelDownloaded && (_settings.VoiceEnabled || _settings.PushToTalkEnabled))
@@ -130,15 +190,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private bool IsAwaitingCommand => DateTime.Now - _wakeHeardAt <= CommandWindow;
 
+    private Rectangle Anchor => _floatingButton.Bounds;
+
     private void UpdateVoiceIndicator()
     {
         var wake = _listener?.IsContinuous == true;
         _floatingButton.SetVoiceState(wake, _talking || (wake && (_form.HasPendingAction || IsAwaitingCommand)));
+        // The "say your command" card from a bare Hey Minibot closes when the command window runs out.
+        if (_popupListening && !_talking && !IsAwaitingCommand)
+        {
+            _popupListening = false;
+            RestorePopup();
+        }
     }
 
     private async Task ResumeVoiceAsync()
     {
-        if (await EnsureListenerAsync() && _settings.VoiceEnabled)
+        if (await EnsureListenerAsync() && _settings.VoiceEnabled && !_voicePaused)
             StartWakeListening(announce: false);
     }
 
@@ -235,6 +303,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _trayIcon.ShowBalloonTip(1800, "LaunchBuddy", "Hey Minibot 語音輸入已關閉，麥克風已停止使用。", ToolTipIcon.Info);
             return;
         }
+        // Turning Hey Minibot on by hand also ends a quick-toggle pause.
+        SetVoicePaused(false);
         if (await EnsureListenerAsync() && StartWakeListening(announce: true))
         {
             _settings.VoiceEnabled = true;
@@ -271,9 +341,65 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.ShowBalloonTip(3500, "無法使用麥克風",
             $"請確認已接上麥克風，並在 Windows 設定 → 隱私權 → 麥克風 允許桌面應用程式使用。\n{exception.Message}", ToolTipIcon.Error);
 
+    private void ApplyPushToTalkEnabled()
+    {
+        if (_pushToTalk is not null)
+            _pushToTalk.Enabled = _settings.PushToTalkEnabled && !_voicePaused;
+    }
+
+    private void RegisterQuickToggle()
+    {
+        _quickToggleProblem = null;
+        _pauseItem.ShortcutKeyDisplayString = null;
+        if (_quickToggle is null || !_settings.QuickToggleEnabled)
+        {
+            _quickToggle?.Unregister();
+            return;
+        }
+        var keys = (Keys)_settings.QuickToggleKeys;
+        if (_quickToggle.Register(keys))
+            _pauseItem.ShortcutKeyDisplayString = GlobalHotkey.Describe(keys);
+        else
+            _quickToggleProblem = $"{GlobalHotkey.Describe(keys)} 已被其他程式使用，請換一組快捷鍵。";
+    }
+
+    private void ToggleVoicePause()
+    {
+        if (_quitting)
+            return;
+        SetVoicePaused(!_voicePaused);
+        var shortcut = _pauseItem.ShortcutKeyDisplayString;
+        var (title, text) = _voicePaused
+            ? ("語音輸入已暫停", shortcut is null ? "按住說話和 Hey Minibot 都不會使用麥克風。" : $"按住說話和 Hey Minibot 都不會使用麥克風。再按 {shortcut} 恢復。")
+            : ("語音輸入已恢復", $"按住 {PushToTalkHook.KeyName(_settings.PushToTalkKey)} 可以直接說話。");
+        // Don't cover an Approve card or the open chat with the notice.
+        if (_form.Visible || _form.HasPendingAction || _form.IsBusy)
+            _trayIcon.ShowBalloonTip(1800, title, text, ToolTipIcon.Info);
+        else
+            _popup.ShowNotice(Anchor, title, text);
+    }
+
+    private void SetVoicePaused(bool paused)
+    {
+        if (_voicePaused == paused)
+            return;
+        _voicePaused = paused;
+        _pauseItem.Checked = paused;
+        if (paused)
+        {
+            CancelTalking();
+            StopWakeListening();
+        }
+        else if (_settings.VoiceEnabled && _listener is not null)
+        {
+            StartWakeListening(announce: false);
+        }
+        ApplyPushToTalkEnabled();
+    }
+
     private void OnTalkPressed()
     {
-        if (_quitting || !_settings.PushToTalkEnabled)
+        if (_quitting || !_settings.PushToTalkEnabled || _voicePaused)
             return;
         if (_listener is null)
         {
@@ -298,6 +424,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _talking = true;
         _talkStarted = DateTime.Now;
         _mouseWatch.Start();
+        _listeningDelay.Stop();
+        _listeningDelay.Start();
         UpdateVoiceIndicator();
     }
 
@@ -312,53 +440,111 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         _talking = false;
         _mouseWatch.Stop();
-        _ = _listener?.EndPushToTalkAsync();
+        _listeningDelay.Stop();
+        var popupShown = _popupListening;
+        _popupListening = false;
+        if (popupShown)
+            _popup.ShowTranscribing();
+        _ = FinishTalkingAsync(popupShown);
         UpdateVoiceIndicator();
+    }
+
+    private async Task FinishTalkingAsync(bool popupShown)
+    {
+        if (_listener is not { } listener)
+            return;
+        bool queued;
+        try
+        {
+            queued = await listener.EndPushToTalkAsync();
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("PushToTalk", exception);
+            queued = false;
+        }
+        // Nothing will be transcribed, so the "正在辨識" card would otherwise just sit there.
+        if (!queued && popupShown && !_talking && !_form.Visible)
+            RestorePopup("沒有聽到聲音，請按住按鍵再說一次。");
     }
 
     private void CancelTalking()
     {
+        _listeningDelay.Stop();
         if (!_talking)
             return;
         _talking = false;
         _mouseWatch.Stop();
         try { _listener?.CancelPushToTalk(); } catch (Exception exception) { AppLog.Error("PushToTalk", exception); }
+        if (_popupListening)
+        {
+            _popupListening = false;
+            RestorePopup();
+        }
         UpdateVoiceIndicator();
+    }
+
+    // Puts back whatever the listening card replaced: the Approve card if one is open, otherwise nothing (or a short notice).
+    private void RestorePopup(string? problem = null)
+    {
+        if (_form.CurrentPendingAction is { } action)
+            _popup.ShowPending(Anchor, action, problem is null ? null : problem + "\n請說 approve 或 reject，或點下方按鈕。");
+        else if (problem is not null)
+            _popup.ShowNotice(Anchor, "沒有聽清楚", problem);
+        else
+            _popup.HidePopup();
     }
 
     private void OpenSettings()
     {
-        using var dialog = new SettingsForm(_settings);
-        // Pressing the current key in the dialog must not start a recording.
+        using var dialog = new SettingsForm(_settings, _quickToggleProblem);
+        // Pressing the current keys in the dialog must not start a recording or toggle the pause.
         if (_pushToTalk is not null)
             _pushToTalk.Enabled = false;
+        _quickToggle?.Unregister();
         CancelTalking();
         var result = dialog.ShowDialog(_form);
         if (result == DialogResult.OK)
         {
             _settings.PushToTalkEnabled = dialog.PushToTalkEnabled;
             _settings.PushToTalkKey = dialog.PushToTalkKey;
+            _settings.QuickToggleEnabled = dialog.QuickToggleEnabled;
+            _settings.QuickToggleKeys = (int)dialog.QuickToggleKeys;
             _settings.Save();
             if (_pushToTalk is not null)
                 _pushToTalk.VirtualKey = _settings.PushToTalkKey;
             if (_settings.PushToTalkEnabled && VoiceListener.IsModelDownloaded)
                 _ = EnsureListenerAsync();
         }
-        if (_pushToTalk is not null)
-            _pushToTalk.Enabled = _settings.PushToTalkEnabled;
+        ApplyPushToTalkEnabled();
+        RegisterQuickToggle();
+        if (_quickToggleProblem is not null)
+            _trayIcon.ShowBalloonTip(3000, "快速開關快捷鍵無法使用", _quickToggleProblem, ToolTipIcon.Warning);
     }
 
     private void OnSpeech(string text, DateTime spokenAt, bool pushToTalk)
     {
-        if (_listener is null || _quitting)
+        if (_listener is null || _quitting || _voicePaused)
             return;
 
+        // With the chat hidden, voice requests stay in the popup beside the button instead of opening the chat.
+        var usePopup = !_form.Visible;
+        _popupListening = false;
+
         // While an Approve card is open, only a short spoken answer given after the card appeared counts.
-        if (_form.HasPendingAction)
+        if (_form.CurrentPendingAction is { } pending)
         {
             var confirmation = VoicePhrases.ParseConfirmation(text);
             if (spokenAt >= _form.PendingSince && confirmation != VoiceConfirmation.None)
+            {
                 _form.ConfirmBySpeech(confirmation, text);
+                if (usePopup)
+                    _popup.ShowResult(_lastReply);
+            }
+            else if (usePopup && pushToTalk)
+            {
+                _popup.ShowPending(Anchor, pending, "沒聽清楚，請按住按鍵再說一次 approve 或 reject。");
+            }
             return;
         }
 
@@ -368,7 +554,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             // Holding the key already says "I'm talking to you"; a habitual "Hey Minibot" is dropped.
             command = VoicePhrases.TryStripWakePhrase(text, out var rest) ? rest : VoicePhrases.Clean(text);
             if (command.Length == 0)
+            {
+                if (usePopup)
+                    RestorePopup("沒有聽清楚，請按住按鍵再說一次。");
                 return;
+            }
         }
         else if (VoicePhrases.TryStripWakePhrase(text, out command))
         {
@@ -377,7 +567,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 _wakeSpokenAt = spokenAt;
                 _wakeHeardAt = DateTime.Now;
                 SystemSounds.Asterisk.Play();
-                ShowChatForSpeech();
+                if (usePopup && !_form.IsBusy)
+                {
+                    _popupListening = true;
+                    _popup.ShowListening(Anchor, "請說出指令，例如「open Google Chrome」。");
+                }
                 return;
             }
         }
@@ -393,14 +587,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _wakeHeardAt = DateTime.MinValue;
         if (_form.IsBusy)
             return;
-        ShowChatForSpeech();
-        _ = _form.SubmitSpokenAsync(command);
+        if (usePopup)
+            _ = SubmitFromPopupAsync(command);
+        else
+            _ = _form.SubmitSpokenAsync(command);
     }
 
-    private void ShowChatForSpeech()
+    private async Task SubmitFromPopupAsync(string command)
     {
-        if (!_form.IsFullShowing && !_form.IsCompactShowing)
-            ShowCompact();
+        _popup.ShowProcessing(Anchor, command);
+        await _form.SubmitSpokenAsync(command);
+        // The user opened the chat meanwhile, or closed the card.
+        if (_quitting || _form.Visible || !_popup.Visible)
+            return;
+        if (_form.CurrentPendingAction is { } action)
+            _popup.ShowPending(Anchor, action);
+        else
+            _popup.ShowResult(_lastReply);
     }
 
     private void ToggleCompact()
@@ -452,13 +655,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _singleClickTimer.Stop();
         _voiceStateTimer.Stop();
         _mouseWatch.Stop();
+        _listeningDelay.Stop();
         _download?.Cancel();
         _pushToTalk?.Dispose();
+        _quickToggle?.Dispose();
         var listener = _listener;
         _listener = null;
         listener?.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _popup.Close();
         _floatingButton.Close();
         _form.Close();
         _form.Dispose();
@@ -472,9 +678,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _singleClickTimer.Dispose();
             _voiceStateTimer.Dispose();
             _mouseWatch.Dispose();
+            _listeningDelay.Dispose();
             _pushToTalk?.Dispose();
+            _quickToggle?.Dispose();
             _listener?.Dispose();
             _trayIcon.Dispose();
+            _popup.Dispose();
             _floatingButton.Dispose();
         }
 

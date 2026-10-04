@@ -165,10 +165,11 @@ internal sealed class AssistantForm : Form
         };
 
         AddMessage("助手", "你好，我只會協助你尋找／開啟程式，以及永久記住你明確指定的網站。\n\n所有開啟、儲存、更新與刪除，都必須先由你按 Approve。", false);
+        // Index right away: a voice command can arrive before the window has ever been shown.
+        if (startIndex)
+            _applicationIndex.StartExtendedIndexing();
         Shown += async (_, _) =>
         {
-            if (startIndex)
-                _applicationIndex.StartExtendedIndexing();
             await UpdateModelStatusAsync();
             _input.Focus();
         };
@@ -176,11 +177,17 @@ internal sealed class AssistantForm : Form
 
     public bool IsCompactShowing => Visible && _compact && WindowState != FormWindowState.Minimized;
     public event EventHandler? SettingsRequested;
+    // Let the voice popup mirror the conversation while this window stays hidden.
+    public event Action<string>? AssistantReplied;
 
     public bool IsBusy => _isSubmitting;
     public bool HasPendingAction => _pendingAction is not null;
     // When the current Approve card appeared; speech that started earlier must not answer it.
     public DateTime PendingSince => _pendingSince;
+    public PendingAction? CurrentPendingAction => _pendingAction;
+
+    public void ApprovePending() => ApprovePendingAction();
+    public void RejectPending() => RejectPendingAction();
 
     public Task SubmitSpokenAsync(string text) => SubmitAsync(text);
 
@@ -739,6 +746,8 @@ internal sealed class AssistantForm : Form
         _messages.SelectionColor = _messages.ForeColor;
         _messages.SelectionFont = _messages.Font;
         ScrollToBottom();
+        if (!fromUser)
+            AssistantReplied?.Invoke(text.Trim());
     }
 
     private void ScrollToBottom()

@@ -10,18 +10,27 @@ internal sealed class SettingsForm : Form
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_SYSKEYDOWN = 0x0104;
 
+    private enum KeyCapture { None, PushToTalkKey, QuickToggle }
+
     private readonly CheckBox _pushToTalkEnabled;
     private readonly Label _keyLabel;
     private readonly Button _changeKey;
     private readonly Label _keyHint;
-    private bool _capturing;
+    private readonly CheckBox _quickToggleEnabled;
+    private readonly Label _toggleLabel;
+    private readonly Button _changeToggle;
+    private readonly Label _toggleHint;
+    private KeyCapture _capture;
 
     public int PushToTalkKey { get; private set; }
     public bool PushToTalkEnabled => _pushToTalkEnabled.Checked;
+    public Keys QuickToggleKeys { get; private set; }
+    public bool QuickToggleEnabled => _quickToggleEnabled.Checked;
 
-    public SettingsForm(AppSettings settings)
+    public SettingsForm(AppSettings settings, string? quickToggleProblem = null)
     {
         PushToTalkKey = settings.PushToTalkKey;
+        QuickToggleKeys = (Keys)settings.QuickToggleKeys;
         Text = "LaunchBuddy 設定";
         Font = new Font("Segoe UI", 10F);
         BackColor = Theme.Background;
@@ -31,85 +40,88 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(500, 340);
+        ClientSize = new Size(500, 560);
         HandleCreated += (_, _) => Theme.UseDarkTitleBar(this);
 
-        var heading = new Label
-        {
-            Text = "按住說話（Push-to-talk）",
-            Font = new Font("Segoe UI Semibold", 12F),
-            AutoSize = true,
-            Location = new Point(24, 20)
-        };
-        var description = new Label
-        {
-            Text = "按住按鍵說話，放開後辨識並送出，不需要說 Hey Minibot。出現確認卡時，按住說 approve 或 reject。" +
-                   "按住期間若按了其他鍵（例如 Ctrl+C）或滑鼠，這次就不會送出。",
-            ForeColor = Theme.TextSecondary,
-            Location = new Point(24, 54),
-            Size = new Size(452, 96)
-        };
-        _pushToTalkEnabled = new CheckBox
-        {
-            Text = "啟用按住說話",
-            Checked = settings.PushToTalkEnabled,
-            AutoSize = true,
-            Location = new Point(24, 162)
-        };
-        var keyCaption = new Label { Text = "按鍵：", AutoSize = true, Location = new Point(24, 210) };
-        _keyLabel = new Label
-        {
-            Text = PushToTalkHook.KeyName(PushToTalkKey),
-            Font = new Font("Segoe UI Semibold", 10.5F),
-            TextAlign = ContentAlignment.MiddleCenter,
-            BackColor = Theme.Surface,
-            Location = new Point(84, 204),
-            Size = new Size(220, 32)
-        };
-        _changeKey = new Button { Text = "更改按鍵", Location = new Point(316, 204), Size = new Size(110, 32) };
-        Theme.StyleButton(_changeKey);
-        _changeKey.Click += (_, _) => BeginCapture();
-        _keyHint = new Label
-        {
-            ForeColor = Theme.ApprovalText,
-            Location = new Point(24, 244),
-            Size = new Size(452, 40),
-            Font = new Font("Segoe UI", 9F)
-        };
+        var heading = Heading("按住說話（Push-to-talk）", 20);
+        var description = Description(
+            "按住按鍵說話，放開後辨識並送出，不需要說 Hey Minibot。出現確認卡時，按住說 approve 或 reject。" +
+            "按住期間若按了其他鍵（例如 Ctrl+C）或滑鼠，這次就不會送出。", 54, 96);
+        _pushToTalkEnabled = new CheckBox { Text = "啟用按住說話", Checked = settings.PushToTalkEnabled, AutoSize = true, Location = new Point(24, 156) };
+        (_keyLabel, _changeKey) = KeyRow("按鍵：", PushToTalkHook.KeyName(PushToTalkKey), 196, KeyCapture.PushToTalkKey);
+        _keyHint = Hint(236);
 
-        var save = new Button { Text = "儲存", Size = new Size(96, 34), Location = new Point(276, 290), DialogResult = DialogResult.OK };
+        var toggleHeading = Heading("快速開關", 290);
+        var toggleDescription = Description("按這組快捷鍵暫停語音輸入（含 Hey Minibot），再按一次恢復。", 324, 30);
+        _quickToggleEnabled = new CheckBox { Text = "啟用快速開關快捷鍵", Checked = settings.QuickToggleEnabled, AutoSize = true, Location = new Point(24, 362) };
+        (_toggleLabel, _changeToggle) = KeyRow("快捷鍵：", GlobalHotkey.Describe(QuickToggleKeys), 402, KeyCapture.QuickToggle);
+        _toggleHint = Hint(442);
+        _toggleHint.Text = quickToggleProblem ?? "";
+
+        var save = new Button { Text = "儲存", Size = new Size(96, 34), Location = new Point(276, 506), DialogResult = DialogResult.OK };
         Theme.StyleButton(save, Theme.Accent);
-        var cancel = new Button { Text = "取消", Size = new Size(96, 34), Location = new Point(380, 290), DialogResult = DialogResult.Cancel };
+        var cancel = new Button { Text = "取消", Size = new Size(96, 34), Location = new Point(380, 506), DialogResult = DialogResult.Cancel };
         Theme.StyleButton(cancel);
         AcceptButton = save;
         CancelButton = cancel;
 
-        Controls.AddRange([heading, description, _pushToTalkEnabled, keyCaption, _keyLabel, _changeKey, _keyHint, save, cancel]);
-        UpdateHint();
+        Controls.AddRange([heading, description, _pushToTalkEnabled, _keyHint, toggleHeading, toggleDescription, _quickToggleEnabled, _toggleHint, save, cancel]);
+        UpdateKeyHint();
     }
 
-    private void BeginCapture()
+    private static Label Heading(string text, int top) =>
+        new() { Text = text, Font = new Font("Segoe UI Semibold", 12F), AutoSize = true, Location = new Point(24, top) };
+
+    private static Label Description(string text, int top, int height) =>
+        new() { Text = text, ForeColor = Theme.TextSecondary, Location = new Point(24, top), Size = new Size(452, height) };
+
+    private static Label Hint(int top) =>
+        new() { ForeColor = Theme.ApprovalText, Location = new Point(24, top), Size = new Size(452, 40), Font = new Font("Segoe UI", 9F) };
+
+    private (Label Value, Button Change) KeyRow(string caption, string value, int top, KeyCapture capture)
     {
-        _capturing = true;
-        _keyLabel.Text = "請按下新按鍵…";
-        _keyLabel.ForeColor = Theme.UserName;
-        _keyHint.Text = "按 Esc 取消。";
+        var captionLabel = new Label { Text = caption, AutoSize = true, Location = new Point(24, top + 6) };
+        var valueLabel = new Label
+        {
+            Text = value,
+            Font = new Font("Segoe UI Semibold", 10.5F),
+            TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = Theme.Surface,
+            Location = new Point(100, top),
+            Size = new Size(204, 32)
+        };
+        var change = new Button { Text = "更改", Location = new Point(316, top), Size = new Size(110, 32) };
+        Theme.StyleButton(change);
+        change.Click += (_, _) => BeginCapture(capture);
+        Controls.AddRange([captionLabel, valueLabel, change]);
+        return (valueLabel, change);
+    }
+
+    private void BeginCapture(KeyCapture capture)
+    {
+        _capture = capture;
+        var (label, hint) = capture == KeyCapture.PushToTalkKey ? (_keyLabel, _keyHint) : (_toggleLabel, _toggleHint);
+        label.Text = capture == KeyCapture.PushToTalkKey ? "請按下新按鍵…" : "請按下組合鍵…";
+        label.ForeColor = Theme.UserName;
+        hint.Text = capture == KeyCapture.PushToTalkKey ? "按 Esc 取消。" : "例如 Ctrl + Alt + M；需包含 Ctrl、Alt 或 Shift。按 Esc 取消。";
         _changeKey.Enabled = false;
+        _changeToggle.Enabled = false;
     }
 
-    private void EndCapture(int? virtualKey)
+    private void EndCapture()
     {
-        _capturing = false;
-        if (virtualKey is { } key)
-            PushToTalkKey = key;
+        _capture = KeyCapture.None;
         _keyLabel.Text = PushToTalkHook.KeyName(PushToTalkKey);
+        _toggleLabel.Text = GlobalHotkey.Describe(QuickToggleKeys);
         _keyLabel.ForeColor = Theme.Text;
+        _toggleLabel.ForeColor = Theme.Text;
+        _toggleHint.Text = "";
         _changeKey.Enabled = true;
-        _changeKey.Focus();
-        UpdateHint();
+        _changeToggle.Enabled = true;
+        UpdateKeyHint();
     }
 
-    private void UpdateHint()
+    private void UpdateKeyHint()
     {
         var key = (Keys)PushToTalkKey;
         _keyHint.Text = key is >= Keys.A and <= Keys.Z or >= Keys.D0 and <= Keys.D9 or Keys.Space
@@ -120,16 +132,39 @@ internal sealed class SettingsForm : Form
     // Every key, including Tab, arrows, Ctrl and Alt on their own, arrives here before any control handles it.
     protected override bool ProcessCmdKey(ref Message message, Keys keyData)
     {
-        if (_capturing && (message.Msg == WM_KEYDOWN || message.Msg == WM_SYSKEYDOWN))
+        if (_capture == KeyCapture.None || (message.Msg != WM_KEYDOWN && message.Msg != WM_SYSKEYDOWN))
+            return base.ProcessCmdKey(ref message, keyData);
+
+        var virtualKey = (int)message.WParam;
+        if (virtualKey == (int)Keys.Escape)
         {
-            var virtualKey = (int)message.WParam;
-            if (virtualKey == (int)Keys.Escape)
-                EndCapture(null);
-            else
-                EndCapture(ResolveSide(virtualKey));
+            EndCapture();
             return true;
         }
-        return base.ProcessCmdKey(ref message, keyData);
+
+        if (_capture == KeyCapture.PushToTalkKey)
+        {
+            PushToTalkKey = ResolveSide(virtualKey);
+            EndCapture();
+            return true;
+        }
+
+        // Quick toggle: wait while only modifiers are down, then require at least one of them.
+        var key = keyData & Keys.KeyCode;
+        var modifiers = keyData & Keys.Modifiers;
+        if (key is Keys.ControlKey or Keys.ShiftKey or Keys.Menu)
+        {
+            _toggleLabel.Text = modifiers == Keys.None ? "請按下組合鍵…" : string.Join(" + ", GlobalHotkey.ModifierNames(modifiers)) + " + …";
+            return true;
+        }
+        if (modifiers == Keys.None)
+        {
+            _toggleHint.Text = "快捷鍵需要包含 Ctrl、Alt 或 Shift，否則平常打字也會觸發。";
+            return true;
+        }
+        QuickToggleKeys = modifiers | key;
+        EndCapture();
+        return true;
     }
 
     // Window messages report Ctrl/Shift/Alt without the side; the hook needs Left Ctrl (0xA2) rather than Ctrl (0x11).

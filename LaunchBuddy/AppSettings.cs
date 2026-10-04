@@ -11,6 +11,9 @@ internal sealed class AppSettings
     public bool PushToTalkEnabled { get; set; } = true;
     // Windows virtual-key code; 0xA2 is Left Ctrl.
     public int PushToTalkKey { get; set; } = 0xA2;
+    // Shortcut that pauses/resumes push-to-talk, stored as WinForms Keys (key code plus modifier flags).
+    public bool QuickToggleEnabled { get; set; } = true;
+    public int QuickToggleKeys { get; set; } = (int)(Keys.Control | Keys.Alt | Keys.M);
 
     public static AppSettings Load()
     {
