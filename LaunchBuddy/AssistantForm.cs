@@ -179,6 +179,9 @@ internal sealed class AssistantForm : Form
     public event EventHandler? SettingsRequested;
     // Let the voice popup mirror the conversation while this window stays hidden.
     public event Action<string>? AssistantReplied;
+    // Approved "control Discord": the tray runs the session and its top bar.
+    public event Action<ChatAppInfo>? ChatControlRequested;
+    public IntentInterpreter Interpreter => _interpreter;
 
     public bool IsBusy => _isSubmitting;
     public bool HasPendingAction => _pendingAction is not null;
@@ -584,6 +587,33 @@ internal sealed class AssistantForm : Form
                 });
                 return;
 
+            case "control_chat_app":
+                var chatApp = ChatApps.Match(intent.Query);
+                if (chatApp is null)
+                {
+                    AddMessage("助手", $"目前可以控制的聊天 app：{ChatApps.SupportedNames}。例如說「幫我控制 Discord」。", false);
+                    return;
+                }
+                var chatWindow = ChatApps.FindWindow(chatApp);
+                if (chatWindow == IntPtr.Zero)
+                {
+                    AddMessage("助手", $"{chatApp.Name} 沒有開著（縮到系統列也不算）。請先打開 {chatApp.Name} 的視窗，再說一次。", false);
+                    return;
+                }
+                SetPending(new PendingAction
+                {
+                    Kind = PendingActionKind.ControlChat,
+                    Title = $"準備控制 {chatApp.Name}",
+                    Details = $"對話：{new ChatWindow(chatApp, chatWindow).Conversation}\n\n" +
+                        $"• Push to talk 訊息：按住說話鍵說話，文字會打進 {chatApp.Name} 的輸入框，由你決定是否發送。\n" +
+                        (chatApp.CanReadMessages
+                            ? $"• AI 回覆：對方傳來新訊息時，AI 會自動寫好回覆並直接發送。\n"
+                            : $"• AI 回覆：{chatApp.Name} 尚未支援。\n") +
+                        "螢幕正上方會顯示控制列，可切換模式；按「取消」即停止。",
+                    ChatApp = chatApp
+                });
+                return;
+
             case "list_saved_websites":
                 var websites = _websiteStore.All();
                 AddMessage("助手", websites.Count == 0
@@ -700,8 +730,12 @@ internal sealed class AssistantForm : Form
                     _websiteStore.Remove(action.Website!.Alias);
                     AddMessage("助手", $"已移除「{action.Website.Alias}」的永久記錄。", false);
                     break;
+                case PendingActionKind.ControlChat:
+                    ChatControlRequested?.Invoke(action.ChatApp!);
+                    AddMessage("助手", $"已開始控制 {action.ChatApp!.Name}。螢幕正上方有控制列，可切換 Push to talk 訊息／AI 回覆，按「取消」即停止。", false);
+                    break;
                 case PendingActionKind.OpenApplication:
-                    var startInfo = new ProcessStartInfo(action.Item!.Path) { UseShellExecute = true };
+                    var startInfo =new ProcessStartInfo(action.Item!.Path) { UseShellExecute = true };
                     if (action.AsAdministrator)
                     {
                         startInfo.Verb = "runas";

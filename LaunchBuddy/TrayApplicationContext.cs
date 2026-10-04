@@ -42,6 +42,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // The popup shows a transient listening card (key held, or a bare "Hey Minibot").
     private bool _popupListening;
     private bool _settingsOpen;
+    // Set while Minibot controls a chat app (top bar showing).
+    private ChatControlSession? _chatSession;
     private string _lastReply = "";
 
     public TrayApplicationContext()
@@ -50,6 +52,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _form.FormClosing += FormClosing;
         _form.SettingsRequested += (_, _) => OpenSettings();
         _form.AssistantReplied += text => _lastReply = text;
+        _form.ChatControlRequested += StartChatControl;
         // Creating the form installed the WinForms context; voice events arrive on background threads and are posted here.
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
@@ -153,7 +156,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             if (!_talking || _form.Visible || _form.IsBusy)
                 return;
             _popupListening = true;
-            _popup.ShowListening(Anchor, _form.HasPendingAction ? "說 approve 或 reject，放開按鍵送出。" : "說出指令，放開按鍵送出。");
+            _popup.ShowListening(Anchor,
+                _form.HasPendingAction ? "說 approve 或 reject，放開按鍵送出。"
+                : _chatSession is { Mode: ChatMode.PushToTalk } session ? $"說出要打進 {session.App.Name} 的訊息，放開按鍵輸入。"
+                : "說出指令，放開按鍵送出。");
         };
 
         try
@@ -497,6 +503,28 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _popup.HidePopup();
     }
 
+    private void StartChatControl(ChatAppInfo app)
+    {
+        var window = ChatApps.FindWindow(app);
+        if (window == IntPtr.Zero)
+        {
+            _trayIcon.ShowBalloonTip(2500, $"無法控制 {app.Name}", $"{app.Name} 已經沒有開著。", ToolTipIcon.Warning);
+            return;
+        }
+        // One chat at a time: taking over another ends the current one.
+        _chatSession?.Stop($"改為控制 {app.Name}。");
+        var session = new ChatControlSession(new ChatWindow(app, window), _form.Interpreter, PushToTalkHook.KeyName(_settings.PushToTalkKey));
+        session.Ended += reason =>
+        {
+            if (_chatSession == session)
+                _chatSession = null;
+            if (!_quitting)
+                _trayIcon.ShowBalloonTip(2000, $"已停止控制 {app.Name}", reason, ToolTipIcon.Info);
+        };
+        _chatSession = session;
+        session.Start();
+    }
+
     private void OpenSettings()
     {
         if (_settingsOpen)
@@ -566,6 +594,20 @@ internal sealed class TrayApplicationContext : ApplicationContext
             {
                 _popup.ShowPending(Anchor, pending, "沒聽清楚，請按住按鍵再說一次 approve 或 reject。");
             }
+            return;
+        }
+
+        // Controlling a chat in push-to-talk mode: what was said is the message, typed into the chat unsent.
+        if (pushToTalk && _chatSession is { Mode: ChatMode.PushToTalk } session)
+        {
+            var message = VoicePhrases.Clean(text);
+            if (message.Length == 0)
+            {
+                RestorePopup("沒有聽清楚，請按住按鍵再說一次。");
+                return;
+            }
+            _popup.HidePopup();
+            _ = session.DictateAsync(message);
             return;
         }
 
@@ -680,6 +722,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _download?.Cancel();
         _pushToTalk?.Dispose();
         _quickToggle?.Dispose();
+        _chatSession?.Dispose();
         var listener = _listener;
         _listener = null;
         listener?.Dispose();

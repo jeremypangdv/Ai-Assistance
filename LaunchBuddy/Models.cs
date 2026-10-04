@@ -40,6 +40,7 @@ internal sealed class PendingAction
     public WebsiteRecord? Website { get; init; }
     public ComputerItem? Item { get; init; }
     public bool AsAdministrator { get; init; }
+    public ChatAppInfo? ChatApp { get; init; }
 }
 
 internal enum PendingActionKind
@@ -47,5 +48,6 @@ internal enum PendingActionKind
     SaveWebsite,
     OpenWebsite,
     RemoveWebsite,
-    OpenApplication
+    OpenApplication,
+    ControlChat
 }

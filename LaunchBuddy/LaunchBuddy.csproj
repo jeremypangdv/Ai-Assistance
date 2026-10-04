@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>LaunchBuddy</AssemblyName>
     <RootNamespace>LaunchBuddy</RootNamespace>
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <!-- UseWPF drops these from the implicit usings. -->
