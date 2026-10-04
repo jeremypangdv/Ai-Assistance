@@ -6,6 +6,7 @@
   - 左鍵點 icon：開／關小型聊天框。
   - 右鍵點 icon，選 **Maximize（完整聊天）**：開啟原本的完整聊天視窗；小型與完整視窗共用同一段對話。
   - 系統列 icon 亦可用：單擊開小型聊天，雙擊開完整聊天。
+- 語音輸入（預設關閉，右鍵選單「語音輸入（Hey Minibot）」開啟）：說「Hey Minibot, open Google Chrome」或「Hey Minibot，幫我開記事本」；出現確認卡後說 **approve／批准** 或 **reject／取消**，也可照常手動按。詳見下方「語音輸入」。
 - 透過本機 Ollama（`http://127.0.0.1:11434`）的 tool calling 理解中文指令。
 - 搜尋 Windows 開始功能表、Windows App Paths、Microsoft Store 的開始功能表捷徑，以及所有固定磁碟中的 application、檔案與資料夾，然後準備開啟。
 - 可開啟下載資料夾、我的檔案、桌面、文件、圖片、音樂、影片，以及使用者提供完整路徑的本機檔案或資料夾。
@@ -17,7 +18,7 @@
 ## 執行
 
 目前修正版的固定交付位置是 `E:\Ai-Assistance\dist\LaunchBuddy\LaunchBuddy.exe`。
-標題列應顯示 **LaunchBuddy 0.5.1**。先結束系統列中的舊版，再開啟此檔案。
+標題列應顯示 **LaunchBuddy 0.6.0**。先結束系統列中的舊版，再開啟此檔案。
 
 先確定 Ollama 正在執行，並已有至少一個模型（優先選用名稱以 `llama` 開頭的模型）。然後在此資料夾執行：
 
@@ -55,6 +56,15 @@ dotnet build
 按系統列 icon 的右鍵選單「隨 Windows 開機啟動」，可由使用者自行切換開機常駐。資料庫位於：
 
 `%LOCALAPPDATA%\LaunchBuddy\saved-websites.json`
+
+## 語音輸入
+
+- 第一次開啟時會下載 Whisper small 模型（約 180 MB）到 `%LOCALAPPDATA%\LaunchBuddy\models`，之後完全在本機辨識，聲音不會上傳。
+- 開啟後圓形 icon 右上角會出現綠點，Windows 也會顯示麥克風使用中。
+- 可以一口氣說完：「Hey Minibot, open Google Chrome」；或先說「Hey Minibot」，聽到提示音、icon 變紅後，8 秒內說出指令。
+- 等待 Approve／Reject 時 icon 會變紅，直接說 approve、批准、確認，或 reject、取消、不要。只接受單獨說出的確認詞，在確認卡出現之前說的話不算數。
+- 每句大約 2 秒辨識時間（CPU）。中英文都可以；粵語會轉成書面中文。
+- 若無法啟動，請確認已接上麥克風，並在 Windows 設定 → 隱私權 → 麥克風 允許桌面應用程式使用。
 
 ## 安全行為
 

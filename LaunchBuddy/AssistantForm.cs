@@ -27,6 +27,7 @@ internal sealed class AssistantForm : Form
     private DateTime _requestStarted;
     private string _phase = "";
     private PendingAction? _pendingAction;
+    private DateTime _pendingSince;
 
     public AssistantForm(IntentInterpreter? interpreter = null, bool startIndex = true)
     {
@@ -174,6 +175,24 @@ internal sealed class AssistantForm : Form
     }
 
     public bool IsCompactShowing => Visible && _compact && WindowState != FormWindowState.Minimized;
+    public bool IsBusy => _isSubmitting;
+    public bool HasPendingAction => _pendingAction is not null;
+    // When the current Approve card appeared; speech that started earlier must not answer it.
+    public DateTime PendingSince => _pendingSince;
+
+    public Task SubmitSpokenAsync(string text) => SubmitAsync(text);
+
+    public void ConfirmBySpeech(VoiceConfirmation confirmation, string heard)
+    {
+        if (_pendingAction is null || confirmation == VoiceConfirmation.None)
+            return;
+        AddMessage("你（語音）", heard, true);
+        if (confirmation == VoiceConfirmation.Approve)
+            ApprovePendingAction();
+        else
+            RejectPendingAction();
+    }
+
     public bool IsFullShowing => Visible && !_compact && WindowState != FormWindowState.Minimized;
 
     public void ShowFull()
@@ -399,9 +418,9 @@ internal sealed class AssistantForm : Form
         }
     }
 
-    private async Task SubmitAsync()
+    private async Task SubmitAsync(string? spokenText = null)
     {
-        var text = _input.Text.Trim();
+        var text = (spokenText ?? _input.Text).Trim();
         if (string.IsNullOrWhiteSpace(text) || _pendingAction is not null || _isSubmitting)
         {
             return;
@@ -418,8 +437,10 @@ internal sealed class AssistantForm : Form
         _busyTimer.Start();
         try
         {
-            _input.Clear();
-            AddMessage("你", text, true);
+            // A spoken command leaves whatever the user was typing in the box.
+            if (spokenText is null)
+                _input.Clear();
+            AddMessage(spokenText is null ? "你" : "你（語音）", text, true);
             _statusLabel.Text = _phase;
             _messages.Update();
             // Give Windows a chance to paint the sent message before starting work.
@@ -579,6 +600,7 @@ internal sealed class AssistantForm : Form
     private void SetPending(PendingAction action)
     {
         _pendingAction = action;
+        _pendingSince = DateTime.Now;
         _sendButton.Enabled = false;
         _input.Enabled = false;
         _approvalPanel.Controls.Clear();
@@ -617,7 +639,7 @@ internal sealed class AssistantForm : Form
         _approvalPanel.Controls.Add(detail);
         _approvalPanel.Controls.Add(buttons);
         _approvalPanel.Controls.Add(heading);
-        AddMessage("助手", "我已準備好這項動作；請在下方選擇 Approve 或 Reject。", false);
+        AddMessage("助手", "我已準備好這項動作；請在下方選擇 Approve 或 Reject（開啟語音輸入時，也可以直接說 approve 或 reject）。", false);
     }
 
     private void ApprovePendingAction()

@@ -13,6 +13,10 @@ internal sealed class FloatingButton : Form
     private bool _pressed;
     private bool _dragging;
     private bool _hover;
+    private bool _voiceEnabled;
+    private bool _listening;
+    private static readonly Color ListeningColor = Color.FromArgb(214, 64, 69);
+    private static readonly Color VoiceOnDot = Color.FromArgb(52, 199, 89);
 
     public event EventHandler? Clicked;
 
@@ -37,6 +41,16 @@ internal sealed class FloatingButton : Form
         Location = new Point(area.Right - Diameter - EdgeMargin, area.Bottom - Diameter - EdgeMargin);
     }
 
+    // Green dot: voice input is on. Red button: waiting for a spoken command or a spoken Approve/Reject.
+    public void SetVoiceState(bool enabled, bool listening)
+    {
+        if (_voiceEnabled == enabled && _listening == listening)
+            return;
+        _voiceEnabled = enabled;
+        _listening = listening;
+        Invalidate();
+    }
+
     // Keep it out of Alt+Tab.
     protected override CreateParams CreateParams
     {
@@ -54,13 +68,23 @@ internal sealed class FloatingButton : Form
         var graphics = eventArgs.Graphics;
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-        using (var fill = new SolidBrush(_hover ? ControlPaint.Light(Theme.Accent, 0.25f) : Theme.Accent))
+        var baseColor = _listening ? ListeningColor : Theme.Accent;
+        using (var fill = new SolidBrush(_hover ? ControlPaint.Light(baseColor, 0.25f) : baseColor))
             graphics.FillEllipse(fill, 0, 0, Diameter, Diameter);
 
         // E8BD is the "Message" glyph in Segoe MDL2 Assets (present on Windows 10/11).
         using var glyphFont = new Font("Segoe MDL2 Assets", 20F);
         TextRenderer.DrawText(graphics, "", glyphFont, ClientRectangle, Color.White,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+        if (_voiceEnabled)
+        {
+            using var dot = new SolidBrush(VoiceOnDot);
+            using var ring = new Pen(baseColor, 2f);
+            var bounds = new Rectangle(Diameter - 19, 7, 12, 12);
+            graphics.FillEllipse(dot, bounds);
+            graphics.DrawEllipse(ring, bounds);
+        }
     }
 
     protected override void OnMouseEnter(EventArgs eventArgs)
