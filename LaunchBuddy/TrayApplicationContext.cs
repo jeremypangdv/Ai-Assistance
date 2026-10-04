@@ -45,8 +45,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // Set while Minibot controls a chat app (top bar showing).
     private ChatControlSession? _chatSession;
     private string _lastReply = "";
+    // Signalled when LaunchBuddy is started again while this copy is running.
+    private readonly RegisteredWaitHandle _showRequest;
 
-    public TrayApplicationContext()
+    public TrayApplicationContext(EventWaitHandle showRequested)
     {
         _form = new AssistantForm();
         _form.FormClosing += FormClosing;
@@ -55,6 +57,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _form.ChatControlRequested += StartChatControl;
         // Creating the form installed the WinForms context; voice events arrive on background threads and are posted here.
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        _showRequest = ThreadPool.RegisterWaitForSingleObject(showRequested, (_, _) => _ui.Post(_ =>
+        {
+            if (!_quitting)
+                _form.ShowFull();
+        }, null), null, Timeout.Infinite, executeOnlyOnce: false);
 
         _popup.ApproveClicked += () =>
         {
@@ -715,6 +722,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void Quit()
     {
         _quitting = true;
+        _showRequest.Unregister(null);
         _singleClickTimer.Stop();
         _voiceStateTimer.Stop();
         _mouseWatch.Stop();
